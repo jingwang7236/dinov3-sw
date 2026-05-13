@@ -1,0 +1,105 @@
+MODEL:
+  META_ARCHITECTURE: MultiDistillationMetaArch
+multidistillation:
+  enabled: true
+  global_batch_size: 256
+  students:
+  - name: vits
+    config_path: /mnt/mty/open_source_mm/chinasiwei_fm/dinov3-main/dinov3/configs/train/multidist_tests/vits_p16.yaml
+    ranks_range:
+    - 0
+    - 1
+  # - name: vits
+  #   config_path: /mnt/mty/open_source_mm/chinasiwei_fm/dinov3-main/dinov3/configs/train/multidist_tests/vits_p16.yaml
+  #   ranks_range:
+  #   - 0
+  #   - 4
+  # - name: vitb
+  #   config_path: /mnt/mty/open_source_mm/chinasiwei_fm/dinov3-main/dinov3/configs/train/multidist_tests/vitb_p16.yaml
+  #   ranks_range:
+  #   - 4
+  #   - 8
+distillation:  # teacher
+  enabled: true
+  full_cfg_path: /mnt/mty/open_source_mm/chinasiwei_fm/dinov3-main/dinov3/configs/train/vit-large_chinasiwei/vitl_im1k_lin834_chinasiweidataset.yaml
+  # checkpoint_path: ignore
+  checkpoint_path: /mnt/mty/open_source_mm/chinasiwei_fm/dinov3-main/work_dirs/003_dinov3_vit-l_20251117_all_bands_datset_with_downstream_task_data_150w/eval/training_124999/teacher_checkpoint.pth
+train:
+  dataset_path: ChinasiweiDataset:root=/mnt/mty/FM_DATA:list_file=/mnt/mty/FM_DATA/20251023_all_image_list.txt
+  # dataset_path: ChinasiweiDataset:root=:list_file=/mnt/mty/FM_DATA/20251117_images_list_with_downstream_task_dataset.txt
+  cache_dataset: false
+  centering: "sinkhorn_knopp"
+  compile: true
+ibot:
+  separate_head: true
+optim:
+  epochs: 20
+  optimizer: adamw
+  weight_decay: 0.04
+  weight_decay_end: 0.2
+  lr: 0.0002
+  warmup_epochs: 0
+  min_lr: 1.0e-06
+  schedule_trunc_extra: 0.0
+  clip_grad: 3.0
+  freeze_last_layer_epochs: 0
+  scaling_rule: sqrt_wrt_1024
+  patch_embed_lr_mult: 0.2
+  dino_head_wd_multiplier: 1.0
+  layerwise_decay: 0.99
+  multi_tensor_optim: true
+  dump_fsdp_weights_path: ''
+  adamw_beta1: 0.9
+  adamw_beta2: 0.999
+crops:
+  global_crops_scale:
+  - 0.32
+  - 1.0
+  local_crops_number: 8
+  local_crops_scale:
+  - 0.05
+  - 0.32
+  global_crops_size: 256
+  local_crops_size: 112
+  global_local_crop_pairs_ratios: 1.0
+  gram_teacher_crops_size: 256
+  localcrops_subset_of_globalcrops: false
+  share_color_jitter: false
+  horizontal_flips: false
+  gram_teacher_no_distortions: false
+  rgb_mean:
+  - 0.485
+  - 0.456
+  - 0.406
+  rgb_std:
+  - 0.229
+  - 0.224
+  - 0.225
+schedules:
+  weight_decay:
+    start: 0.04
+    peak: 0.04
+    end: 0.04
+    warmup_epochs: 0
+  teacher_temp:
+    start: 0.04
+    peak: 0.07
+    end: 0.07
+    warmup_epochs: 0
+  lr:
+    start: 0
+    peak: 0
+    end: 5.0e-05
+    warmup_epochs: 0
+    freeze_last_layer_epochs: 0
+    cosine_epochs: 10
+  momentum:
+    start: 0.994
+    peak: 0.994
+    end: 1.0
+    warmup_epochs: 0
+
+futher_ssl:
+  enabled: false
+  # enabled: true
+  # checkpoint_path: '/mnt/mty/open_source_mm/chinasiwei_fm/dinov3-main/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth'
