@@ -8,3 +8,4 @@ from .coco_captions import CocoCaptions
 from .image_net import ImageNet
 from .image_net_22k import ImageNet22k
 from .chinasiwei_dataset import ChinasiweiDataset, ChinasiweiBoCDataset
+from .h5_dataset import H5Dataset

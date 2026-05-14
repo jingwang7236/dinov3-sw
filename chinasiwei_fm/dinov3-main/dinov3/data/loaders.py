@@ -10,7 +10,8 @@ from typing import Any, Callable, List, Optional, TypeVar
 import torch
 from torch.utils.data import Sampler
 
-from .datasets import ADE20K, CocoCaptions, ImageNet, ImageNet22k, ChinasiweiDataset, ChinasiweiBoCDataset
+from .datasets import ADE20K, CocoCaptions, ImageNet, ImageNet22k
+from .datasets import ChinasiweiDataset, ChinasiweiBoCDataset, H5Dataset
 from .samplers import EpochSampler, InfiniteSampler, ShardedInfiniteSampler
 
 logger = logging.getLogger("dinov3")
@@ -72,6 +73,8 @@ def _parse_dataset_str(dataset_str: str):
         class_ = ChinasiweiDataset
     elif name == "ChinasiweiBoCDataset":
         class_ = ChinasiweiBoCDataset
+    elif name == "H5Dataset":
+        class_ = H5Dataset
     else:
         raise ValueError(f'Unsupported dataset "{name}"')
 
