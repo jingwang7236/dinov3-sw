@@ -17,4 +17,4 @@ torchrun \
     --master_port=$MASTER_PORT \
     ./dinov3/train/train.py \
     --config-file ./dinov3/configs/train/vitlarge_chinasiwei/vitl_swdata_pretrain_from_scracth.yaml \
-    --output-dir work_dirs_multi_gpu
+    --output-dir work_dirs/multi_gpu

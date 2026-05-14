@@ -45,7 +45,7 @@ train:
   batch_size_per_gpu: 48
   dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/data/test_image_list.txt
   # dataset_path: ChinasiweiDataset:root=/mnt/data
-  output_dir: ./output/vitl_swdata_pretrain_from_scracth
+  output_dir: ./work_dirs/vitl_swdata_pretrain_from_scracth
   saveckp_freq: 20
   seed: 0
   num_workers: 10
