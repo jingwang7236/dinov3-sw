@@ -1,7 +1,7 @@
 # 单机单卡，从头预训练
 CUDA_LAUNCH_BLOCKING=1 CUDA_VISIBLE_DEVICES=1 TORCH_COMPILE_DISABLE=1 PYTHONPATH=${PWD} \
 python ./dinov3/train/train.py \
-    --config-file ./dinov3/configs/train/vit-large_chinasiwei/vitl_swdata_pretrain_from_scracth.yaml \
+    --config-file ./dinov3/configs/train/vit-large_chinasiwei/vitl_swdata_pretrain.yaml \
     --output-dir work_dirs
 
 # 单机多卡，从头预训练
@@ -16,5 +16,5 @@ torchrun \
     --nproc_per_node=4 \
     --master_port=$MASTER_PORT \
     ./dinov3/train/train.py \
-    --config-file ./dinov3/configs/train/vitlarge_chinasiwei/vitl_swdata_pretrain_from_scracth.yaml \
+    --config-file ./dinov3/configs/train/vit-large_chinasiwei/vitl_swdata_pretrain.yaml \
     --output-dir work_dirs/multi_gpu

@@ -44,7 +44,7 @@ gram:
 train:
   batch_size_per_gpu: 48
   dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/data/test_image_list.txt
-  output_dir: ./work_dirs/vitl_swdata_pretrain_from_scracth
+  output_dir: ./work_dirs/vitl_swdata_pretrain
   saveckp_freq: 20
   seed: 0
   num_workers: 10
@@ -87,7 +87,7 @@ student:
   pos_embed_rope_jitter_coords: null
   pos_embed_rope_rescale_coords: null
   pos_embed_rope_dtype: bf16
-  fp8_enabled: False  # Convert Linear layers to operate in fp8 precision
+  fp8_enabled: False 
   fp8_filter: "blocks"  # Regex that must appear in module path; empty means everything
   channel_adaptive: false
 teacher:
