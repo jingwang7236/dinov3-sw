@@ -8,6 +8,8 @@ import logging
 import os
 import sys
 from typing import Optional
+# import omegaconf
+from omegaconf import OmegaConf, DictConfig, ListConfig
 
 from termcolor import colored
 
@@ -28,23 +30,48 @@ class _LevelColoredFormatter(logging.Formatter):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    # def formatMessage(self, record):
+    #     log = super().formatMessage(record)
+
+    #     colored_kwargs = _LEVEL_COLORED_KWARGS.get(record.levelno)
+    #     if colored_kwargs is None:
+    #         return log
+
+    #     msg = record.msg % record.args if record.msg == "%s" else record.msg
+    #     index = log.rfind(msg, len(log) - len(msg))
+    #     # Can happen in some cases, like if the msg contains `%s` which
+    #     # have been replaced in `formatMessage`. Fallback to no colors
+    #     if index == -1:
+    #         return log
+    #     prefix = log[:index]
+    #     prefix = colored(prefix, **colored_kwargs)
+    #     return prefix + msg
     def formatMessage(self, record):
         log = super().formatMessage(record)
-
-        colored_kwargs = _LEVEL_COLORED_KWARGS.get(record.levelno)
-        if colored_kwargs is None:
-            return log
-
-        msg = record.msg % record.args if record.msg == "%s" else record.msg
-        index = log.rfind(msg, len(log) - len(msg))
-        # Can happen in some cases, like if the msg contains `%s` which
-        # have been replaced in `formatMessage`. Fallback to no colors
+        msg = record.msg
+        
+        if not isinstance(msg, str):
+            try:
+                if isinstance(msg, (DictConfig, ListConfig)):
+                    msg = OmegaConf.to_yaml(msg, resolve=True)
+                else:
+                    msg = str(msg)
+            except ImportError:
+                msg = str(msg)
+            except Exception:
+                msg = str(msg)
+        
+        index = log.rfind(msg)
         if index == -1:
             return log
         prefix = log[:index]
-        prefix = colored(prefix, **colored_kwargs)
+        
+        colored_kwargs = _LEVEL_COLORED_KWARGS.get(record.levelno)
+        if colored_kwargs is None:
+            return log
+        if prefix:
+            prefix = colored(prefix, **colored_kwargs)
         return prefix + msg
-
 
 # So that calling _configure_logger multiple times won't add many handlers
 @functools.lru_cache()
