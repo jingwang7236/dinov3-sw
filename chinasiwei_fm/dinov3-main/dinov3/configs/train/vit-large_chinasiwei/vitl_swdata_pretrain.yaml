@@ -47,11 +47,11 @@ train:
   output_dir: ./work_dirs/vitl_swdata_pretrain
   saveckp_freq: 20
   seed: 0
-  num_workers: 10
+  num_workers: 2
   OFFICIAL_EPOCH_LENGTH: 1250
   monitor_gradient_norm: false
   chunk_schedule: []
-  cache_dataset: true
+  cache_dataset: false
   use_teacher_head: true
   learn_from_teacher_tokens: false
   centering: sinkhorn_knopp

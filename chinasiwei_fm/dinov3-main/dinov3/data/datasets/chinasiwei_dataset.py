@@ -4,9 +4,9 @@ from .decoders import Decoder, MultiBandTiffDecoder, ImageDataDecoder, TargetDec
 from .extended import ExtendedVisionDataset
 from typing import Any, Tuple
 import numpy as np
-
+import tifffile
 import random
-
+from PIL import Image
 class ChinasiweiDataset(ExtendedVisionDataset):
     """
     读取 <root>/list.txt，每行是图片相对路径或绝对路径。
@@ -41,37 +41,79 @@ class ChinasiweiDataset(ExtendedVisionDataset):
     def get_target(self, index: int) -> Any:
         return None
 
+    # def __getitem__(self, index: int) -> Tuple[Any, Any]:
+    #     try:
+    #         image_data = self.get_image_data(index)
+    #         image = self.image_decoder(image_data).decode()
+    #     except Exception as e:
+    #         print(f"failed to load {self.items[index]}")
+    #         raise RuntimeError(f"can not read image for sample {index}") from e
+    #     target = self.get_target(index)
+    #     target = self.target_decoder(target).decode()
+
+    #     if self.transforms is not None:
+    #         image, target = self.transforms(image, target)
+
+    #     return image, target
+    
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
+        path = os.path.join(self.root, self.items[index])
+        
         try:
-            image_data = self.get_image_data(index)
-            image = self.image_decoder(image_data).decode()
-            # 随机裁剪逻辑
-            # 假设 image 是 HWC 格式的 Numpy Array 或 PIL Image
-            if hasattr(image, 'size'): # PIL Image
-                img_w, img_h = image.size
-            else: # Numpy Array (H, W, C)
-                img_h, img_w = image.shape[:2]
-            if img_w > self.crop_size or img_h > self.crop_size:
-                x_max = img_w - self.crop_size
-                y_max = img_h - self.crop_size
-                # 随机选择左上角坐标
-                x_start = random.randint(0, x_max) if x_max > 0 else 0
-                y_start = random.randint(0, y_max) if y_max > 0 else 0
-                if hasattr(image, 'crop'): # PIL
-                    image = image.crop((x_start, y_start, x_start + self.crop_size, y_start + self.crop_size))
-                else: # Numpy
-                    image = image[y_start:y_start+self.crop_size, x_start:x_start+self.crop_size, :]
-            
+            # 获取图像尺寸 (tifffile 读取元数据很快，不加载像素数据)
+            with tifffile.TiffFile(path) as tif:
+                page = tif.pages[0]
+                img_h, img_w = page.shape[0], page.shape[1]
+                if img_w > self.crop_size:
+                    x_start = random.randint(0, img_w - self.crop_size)
+                else:
+                    x_start = 0
+                    
+                if img_h > self.crop_size:
+                    y_start = random.randint(0, img_h - self.crop_size)
+                else:
+                    y_start = 0
+                
+                # 只读取窗口区域的数据 (Out-of-core reading)
+                # key='contiguous' 确保数据连续存储，提高读取速度
+                window_data = page.asarray(key='contiguous')[
+                    y_start:y_start+self.crop_size, 
+                    x_start:x_start+self.crop_size
+                ]
+                
+                # window_data shape: (H, W, C) or (H, W) depending on TIFF structure
+                # 确保是 HWC 格式
+                if window_data.ndim == 3 and window_data.shape[0] < 10: # 可能是 CHW
+                     window_data = np.transpose(window_data, (1, 2, 0))
+                
+                # 数据类型转换与归一化
+                # 假设是 uint16 遥感数据，转换为 float32 并归一化到 0-1 或标准分布
+                if window_data.dtype == np.uint16:
+                    window_data = window_data.astype(np.float32) / 65535.0
+                elif window_data.dtype == np.uint8:
+                    window_data = window_data.astype(np.float32) / 255.0
+                
+                # 转换为 PIL Image 以兼容后续的 DINO transforms
+                # 如果波段数 > 3，取前三个波段用于可视化/预训练，或者根据需求处理
+                if window_data.shape[-1] >= 3:
+                    pil_img = Image.fromarray((window_data[:, :, :3] * 255).astype(np.uint8))
+                else:
+                    # 如果是单波段，复制成三波段
+                    gray = (window_data * 255).astype(np.uint8)
+                    pil_img = Image.merge("RGB", [Image.fromarray(gray), Image.fromarray(gray), Image.fromarray(gray)])
+
         except Exception as e:
-            print(f"failed to load {self.items[index]}")
-            raise RuntimeError(f"can not read image for sample {index}") from e
+            print(f"Failed to load {path}: {e}")
+            # 返回一个空白图像避免训练中断，或者抛出异常
+            pil_img = Image.new("RGB", (self.crop_size, self.crop_size), (0, 0, 0))
+
         target = self.get_target(index)
         target = self.target_decoder(target).decode()
-
+        
         if self.transforms is not None:
-            image, target = self.transforms(image, target)
+            pil_img, target = self.transforms(pil_img, target)
 
-        return image, target
+        return pil_img, target
     def __len__(self) -> int:
         return len(self.items)
 
