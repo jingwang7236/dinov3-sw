@@ -4,9 +4,10 @@ from .decoders import Decoder, MultiBandTiffDecoder, ImageDataDecoder, TargetDec
 from .extended import ExtendedVisionDataset
 from typing import Any, Tuple
 import numpy as np
-import tifffile
 import random
 from PIL import Image
+import rasterio
+from rasterio.windows import Window
 class ChinasiweiDataset(ExtendedVisionDataset):
     """
     读取 <root>/list.txt，每行是图片相对路径或绝对路径。
@@ -60,10 +61,12 @@ class ChinasiweiDataset(ExtendedVisionDataset):
         path = os.path.join(self.root, self.items[index])
         
         try:
-            # 获取图像尺寸 (tifffile 读取元数据很快，不加载像素数据)
-            with tifffile.TiffFile(path) as tif:
-                page = tif.pages[0]
-                img_h, img_w = page.shape[0], page.shape[1]
+            # 1. 打开文件获取尺寸和波段信息
+            with rasterio.open(path) as src:
+                img_h, img_w = src.height, src.width
+                num_bands = src.count
+                
+                # 2. 计算随机裁剪窗口
                 if img_w > self.crop_size:
                     x_start = random.randint(0, img_w - self.crop_size)
                 else:
@@ -74,37 +77,41 @@ class ChinasiweiDataset(ExtendedVisionDataset):
                 else:
                     y_start = 0
                 
-                # 只读取窗口区域的数据 (Out-of-core reading)
-                # key='contiguous' 确保数据连续存储，提高读取速度
-                window_data = page.asarray(key='contiguous')[
-                    y_start:y_start+self.crop_size, 
-                    x_start:x_start+self.crop_size
-                ]
+                window = Window(x_start, y_start, self.crop_size, self.crop_size)
                 
-                # window_data shape: (H, W, C) or (H, W) depending on TIFF structure
-                # 确保是 HWC 格式
-                if window_data.ndim == 3 and window_data.shape[0] < 10: # 可能是 CHW
-                     window_data = np.transpose(window_data, (1, 2, 0))
-                
-                # 数据类型转换与归一化
-                # 假设是 uint16 遥感数据，转换为 float32 并归一化到 0-1 或标准分布
-                if window_data.dtype == np.uint16:
-                    window_data = window_data.astype(np.float32) / 65535.0
-                elif window_data.dtype == np.uint8:
-                    window_data = window_data.astype(np.float32) / 255.0
-                
-                # 转换为 PIL Image 以兼容后续的 DINO transforms
-                # 如果波段数 > 3，取前三个波段用于可视化/预训练，或者根据需求处理
-                if window_data.shape[-1] >= 3:
-                    pil_img = Image.fromarray((window_data[:, :, :3] * 255).astype(np.uint8))
+                # 3. 【关键修改】根据波段数动态读取
+                if num_bands >= 3:
+                    # 读取前三个波段
+                    indexes = (1, 2, 3)
+                    window_data = src.read(indexes=indexes, window=window, out_dtype='float32')
                 else:
-                    # 如果是单波段，复制成三波段
-                    gray = (window_data * 255).astype(np.uint8)
-                    pil_img = Image.merge("RGB", [Image.fromarray(gray), Image.fromarray(gray), Image.fromarray(gray)])
+                    # 读取所有可用波段
+                    indexes = tuple(range(1, num_bands + 1))
+                    window_data = src.read(indexes=indexes, window=window, out_dtype='float32')
+                    
+                    # 补齐到 3 个通道 (C, H, W)
+                    # 例如：如果是 1 个波段，复制成 3 份；如果是 2 个波段，复制最后 1 份
+                    current_c = window_data.shape[0]
+                    if current_c < 3:
+                        last_band = window_data[-1:, :, :] # 取最后一个波段 (1, H, W)
+                        repeat_times = 3 - current_c
+                        # 拼接: 原始数据 + 重复的最后一个波段
+                        window_data = np.concatenate([window_data] + [last_band] * repeat_times, axis=0)
+
+                # window_data shape: (C, H, W) -> 转换为 (H, W, C)
+                window_data = np.transpose(window_data, (1, 2, 0))
+                
+                # 4. 数据类型转换与归一化
+                max_val = window_data.max()
+                if max_val > 1.0:
+                    window_data = window_data / max_val
+                
+                # 5. 转换为 PIL Image
+                pil_img = Image.fromarray((window_data * 255).astype(np.uint8))
 
         except Exception as e:
             print(f"Failed to load {path}: {e}")
-            # 返回一个空白图像避免训练中断，或者抛出异常
+            # 返回一个空白图像避免训练中断
             pil_img = Image.new("RGB", (self.crop_size, self.crop_size), (0, 0, 0))
 
         target = self.get_target(index)
