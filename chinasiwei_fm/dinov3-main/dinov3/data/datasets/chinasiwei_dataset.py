@@ -34,7 +34,8 @@ class ChinasiweiDataset(ExtendedVisionDataset):
                 if not p:
                     continue
                 self.items.append(p)
-        rasterio.env.setenv(GDAL_CACHEMAX=0) 
+        self.iter_count = 0
+
     def get_image_data(self, index: int) -> bytes:
         full = os.path.join(self.root, self.items[index])
         with open(full, "rb") as f:
@@ -120,7 +121,9 @@ class ChinasiweiDataset(ExtendedVisionDataset):
         
         if self.transforms is not None:
             pil_img, target = self.transforms(pil_img, target)
-        gc.collect()
+        self.iter_count += 1
+        if self.iter_count % 10 == 0:
+            gc.collect()
         return pil_img, target
     def __len__(self) -> int:
         return len(self.items)
