@@ -5,6 +5,8 @@ from .extended import ExtendedVisionDataset
 from typing import Any, Tuple
 import numpy as np
 
+import random
+
 class ChinasiweiDataset(ExtendedVisionDataset):
     """
     读取 <root>/list.txt，每行是图片相对路径或绝对路径。
@@ -18,17 +20,18 @@ class ChinasiweiDataset(ExtendedVisionDataset):
         target_transform: Optional[Callable] = None,
         # image_decoder: Decoder = ImageDataDecoder,
         image_decoder: Decoder = MultiBandTiffDecoder,
+        crop_size: int = 512,
     ) -> None:
         super().__init__(root=root, transforms=transforms, transform=transform,
                          target_transform=target_transform, image_decoder=image_decoder)
         self.items: List[str] = []
+        self.crop_size = crop_size
         with open(os.path.join(root, list_file), "r") as f:
             for ln in f:
                 p = ln.strip()
                 if not p:
                     continue
                 self.items.append(p)
-                # self.items.append(p if os.path.isabs(p) else os.path.join("images", p))
 
     def get_image_data(self, index: int) -> bytes:
         full = os.path.join(self.root, self.items[index])
@@ -42,6 +45,23 @@ class ChinasiweiDataset(ExtendedVisionDataset):
         try:
             image_data = self.get_image_data(index)
             image = self.image_decoder(image_data).decode()
+            # 随机裁剪逻辑
+            # 假设 image 是 HWC 格式的 Numpy Array 或 PIL Image
+            if hasattr(image, 'size'): # PIL Image
+                img_w, img_h = image.size
+            else: # Numpy Array (H, W, C)
+                img_h, img_w = image.shape[:2]
+            if img_w > self.crop_size or img_h > self.crop_size:
+                x_max = img_w - self.crop_size
+                y_max = img_h - self.crop_size
+                # 随机选择左上角坐标
+                x_start = random.randint(0, x_max) if x_max > 0 else 0
+                y_start = random.randint(0, y_max) if y_max > 0 else 0
+                if hasattr(image, 'crop'): # PIL
+                    image = image.crop((x_start, y_start, x_start + self.crop_size, y_start + self.crop_size))
+                else: # Numpy
+                    image = image[y_start:y_start+self.crop_size, x_start:x_start+self.crop_size, :]
+            
         except Exception as e:
             print(f"failed to load {self.items[index]}")
             raise RuntimeError(f"can not read image for sample {index}") from e
