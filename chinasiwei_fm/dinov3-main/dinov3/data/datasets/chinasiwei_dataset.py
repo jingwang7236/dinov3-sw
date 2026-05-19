@@ -1,4 +1,5 @@
 import os
+import gc
 from typing import Callable, Optional, List, Any
 from .decoders import Decoder, MultiBandTiffDecoder, ImageDataDecoder, TargetDecoder, ChannelSelectTIFFDecoder
 from .extended import ExtendedVisionDataset
@@ -33,7 +34,7 @@ class ChinasiweiDataset(ExtendedVisionDataset):
                 if not p:
                     continue
                 self.items.append(p)
-
+        rasterio.env.setenv(GDAL_CACHEMAX=0) 
     def get_image_data(self, index: int) -> bytes:
         full = os.path.join(self.root, self.items[index])
         with open(full, "rb") as f:
@@ -59,7 +60,7 @@ class ChinasiweiDataset(ExtendedVisionDataset):
     
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
         path = os.path.join(self.root, self.items[index])
-        
+        pil_img = None
         try:
             # 1. 打开文件获取尺寸和波段信息
             with rasterio.open(path) as src:
@@ -119,7 +120,7 @@ class ChinasiweiDataset(ExtendedVisionDataset):
         
         if self.transforms is not None:
             pil_img, target = self.transforms(pil_img, target)
-
+        gc.collect()
         return pil_img, target
     def __len__(self) -> int:
         return len(self.items)
