@@ -122,7 +122,7 @@ optim:
   dino_head_wd_multiplier: 1.0
   layerwise_decay: 0.9
   multi_tensor_optim: true
-  dump_fsdp_weights_path: ''
+  dump_fsdp_weights_path: './work_dirs/vitl_swdata_pretrain/checkpoint' 
   adamw_beta1: 0.9
   adamw_beta2: 0.999
 crops:
