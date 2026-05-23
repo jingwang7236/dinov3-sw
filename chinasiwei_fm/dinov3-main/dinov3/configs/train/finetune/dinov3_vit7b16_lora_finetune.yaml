@@ -1,7 +1,7 @@
 MODEL:
   META_ARCHITECTURE: SSLMetaArch
   DEVICE: cuda
-  WEIGHTS: '/path/to/dinov3_vit7b16_pretrained.pth'
+  WEIGHTS: '/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vit7b16_pretrain_sat493m-a6675841.pth'
   DTYPE: float32
 compute_precision:
   param_dtype: bf16
@@ -54,7 +54,7 @@ gram:
   compute_stats: false
 train:
   batch_size_per_gpu: 1
-  dataset_path: '/path/to/your/dataset' # TODO: 自研数据集
+  dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/ht2-nas2/00-model/00-wj/Data/tiff_test_data/test_tiff.txt
   saveckp_freq: 5
   seed: 0
   num_workers: 10
@@ -72,6 +72,7 @@ train:
   cell_augmentation: false
   cell_augmentation_type: hpa
   sharded_eval_checkpoint: true
+  channel_adaptive: false
 student:
   arch: vit_7b
   patch_size: 16
@@ -173,6 +174,7 @@ schedules:
     start: 0.05
     peak: 0.05
     end: 0.05
+    warmup_epochs: 5
   teacher_temp:
     start: 0.04
     peak: 0.07
@@ -186,4 +188,4 @@ schedules:
 futher_ssl:
   # enabled: false  # pretrain from scratch, loss higher than "enabled: true" setting
   enabled: true
-  checkpoint_path: '../checkpoints/vitl16_pretrain_sat493m-eadcf0ff.pth'
+  checkpoint_path: '/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vit7b16_pretrain_sat493m-a6675841.pth'
