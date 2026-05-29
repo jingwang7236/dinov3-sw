@@ -3,6 +3,11 @@ _base_ = [
     '_base_/datasets/geo_bench_neontree.py'
 ]
 
+custom_imports = dict(
+    imports=['mmpretrain.models.backbones.dinov3'],
+    allow_failed_imports=False
+)
+
 experiment_name = 'dinov3_sat493m_vit-l_uperhead_neontree_downstream'
 work_dir = f'./work_dirs/dinov3/geo_bench_neontree/{experiment_name}'
 
