@@ -1,4 +1,5 @@
 # step02 gram, based on step01: vitl_swdata_pretrain.yaml
+# 在训练过程中要随时观察loss下降过程，防止过拟合，或者gram loss影响了dino loss
 MODEL:
   META_ARCHITECTURE: SSLMetaArch
   DEVICE: cuda
@@ -27,7 +28,7 @@ dino:
     start: 1
     peak: 1
     end: 0.5
-    warmup_epochs: 100  #  TODO:改为Warmup 阶段持续的 Epoch 数
+    warmup_epochs: 3  #  TODO:改为Warmup 阶段持续的 Epoch 数
     cosine_epochs: 1
 ibot:
   loss_weight: 1.0
@@ -50,12 +51,12 @@ gram:
   loss_weight: 1.0
   loss_weight_schedule: null
   ema_teacher: false
-  ckpt: ../checkpoints/vitl16_pretrain_sat493m-eadcf0ff.pth
+  ckpt: './work_dirs/eval/training_12499/teacher_checkpoint.pth'
   it_load_ema_teacher: 0
   rep_update: true  # 启用表示更新
-  update_frequency: 10000  # TODO: 减少更新次数,参考7B的更新频率
-  it_first_update: 100000  # TODO:epochs*OFFICIAL_EPOCH_LENGTH*(2/3)，参考7B的2/3训练周期
-  max_updates: 3  # 最多更新次数
+  update_frequency: 2000  # TODO: 减少更新次数,参考7B的更新频率
+  it_first_update: 25000  # TODO:epochs*OFFICIAL_EPOCH_LENGTH*(2/3)，参考7B的2/3训练周期
+  max_updates: 5  # 最多更新次数
   normalized: true
   img_level: true
   remove_neg: false
@@ -65,9 +66,9 @@ gram:
   global_teacher_resize_antialias: false
 train:
   batch_size_per_gpu: 48
-  dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/data/test_image_list.txt
+  dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/ht2-nas2/00-model/00-wj/Data/tiff_test_data/test_tiff.txt
   output_dir: ./work_dirs/vitl_swdata_gram_anchor
-  saveckp_freq: 20
+  saveckp_freq: 5
   seed: 0
   num_workers: 10
   OFFICIAL_EPOCH_LENGTH: 1250
@@ -84,7 +85,7 @@ train:
   cell_augmentation: false
   cell_augmentation_type: hpa
   channel_adaptive: false
-  sharded_eval_checkpoint: true  # 分片评估checkpoint
+  sharded_eval_checkpoint: false  # 分片评估checkpoint
 student:
   arch: vit_large
   patch_size: 16
@@ -94,7 +95,7 @@ student:
   pretrained_weights: ''
   ffn_layer: mlp
   ffn_ratio: 4.0
-  resume_from_teacher_chkpt: '../checkpoints/vitl16_swdata_pretrain_step01.pth'  # 一阶段预训练权重
+  resume_from_teacher_chkpt: './work_dirs/eval/training_12499/teacher_checkpoint.pth'  # 一阶段预训练权重
   qkv_bias: true
   proj_bias: true
   ffn_bias: true
@@ -134,16 +135,16 @@ hrft:
   enabled: false
   checkpoint_path: ''
 optim:
-  epochs: 120  # TODO: 参考一阶段的epochs
+  epochs: 30  # TODO: 参考一阶段的epochs
   optimizer: adamw
   weight_decay: 0.04
   weight_decay_end: 0.4
   lr: 3.0e-05  # 二阶段微调使用最小学习率
-  warmup_epochs: 10  # TODO: epochs的1/10作为warmup阶段
+  warmup_epochs: 3  # TODO: epochs的1/10作为warmup阶段
   min_lr: 3.0e-05  # 学习率保持不变，使得继续预训练阶段模型保持稳定的更新速度
   clip_grad: 3.0  # 梯度裁剪阈值
   # 短暂冻结 Head 5 epochs，强制 Backbone 先适应新数据，确保特征空间的平稳迁移，适用于数据分布差异大的情况
-  freeze_last_layer_epochs: 5  # 如果预训练数据集和自研数据集分布差异不大，可设置为0
+  freeze_last_layer_epochs: 0  # 如果预训练数据集和自研数据集分布差异不大，可设置为0
   scaling_rule: sqrt_wrt_1024
   patch_embed_lr_mult: 0.2
   dino_head_wd_multiplier: 1.0
@@ -186,15 +187,15 @@ checkpointing:
   max_to_keep: 3
   keep_every: 25000  # TODO：额外强制保留检查点的间隔，单位是迭代次数
 futher_ssl:
-  enabled: true
-  checkpoint_path: '../checkpoints/vitl16_pretrain_sat493m-eadcf0ff.pth'
+  enabled: false
+  # checkpoint_path: './work_dirs/eval/training_12499/teacher_checkpoint.pth'
 schedules:  # 优先于optim的调度
   lr:
     start: 0
     peak: 3.0e-05
     end: 3.0e-05
-    warmup_epochs: 10
-    freeze_last_layer_epochs: 5
+    warmup_epochs: 3
+    freeze_last_layer_epochs: 0
   weight_decay:
     start: 0.04
     peak: 0.04
@@ -204,7 +205,7 @@ schedules:  # 优先于optim的调度
     start: 0.04
     peak: 0.07
     end: 0.07
-    warmup_epochs: 20
+    warmup_epochs: 3
   momentum:
     start: 0.999
     peak: 0.999

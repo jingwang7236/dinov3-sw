@@ -44,6 +44,7 @@ from .multi_class_dataset import Muti_Class_Dataset
 from .cloudsen12 import CloudSen12Dataset, CloudTestDataset, ChinasiweiCloudDataset
 from .water import WaterDataset
 from .greenhouse import GreenhouseDataset
+from .geo_bench_neontree import GeoBenchNeonTree
 
 # yapf: enable
 __all__ = [
@@ -66,5 +67,5 @@ __all__ = [
     'LoadMultipleRSImageFromFile', 'LoadSingleRSImageFromFile',
     'ConcatCDInput', 'BaseCDDataset', 'DSDLSegDataset', 'BDD100KDataset',
     'NYUDataset', 'HSIDrive20Dataset', 'Muti_Class_Dataset', 'CloudSen12Dataset', 'CloudTestDataset', 'ChinasiweiCloudDataset',
-    'WaterDataset','GreenhouseDataset',
+    'WaterDataset','GreenhouseDataset', 'GeoBenchNeonTree'
 ]

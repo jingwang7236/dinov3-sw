@@ -21,6 +21,10 @@ peft:
     - ".*mlp.fc1"
     - ".*mlp.fc2"
   modules_to_save: null
+logging:
+  enabled: true
+  log_dir: './work_dirs/finetune/dinov3_vit7b16_lora_finetune/tensorboard' # Path for TensorBoard logs
+  flush_secs: 120 # How often to write to disk (in seconds)
 dino:
   loss_weight: 1.0
   global_ignore_diagonal: true
@@ -54,7 +58,7 @@ gram:
   compute_stats: false
 train:
   batch_size_per_gpu: 1
-  dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/ht2-nas2/00-model/00-wj/Data/tiff_test_data/test_tiff.txt
+  dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/ht2-nas2/00-model/00-wj/Data/AID/aid.txt
   saveckp_freq: 5
   seed: 0
   num_workers: 10
@@ -71,7 +75,7 @@ train:
   cudagraphs: false
   cell_augmentation: false
   cell_augmentation_type: hpa
-  sharded_eval_checkpoint: true
+  sharded_eval_checkpoint: false
   channel_adaptive: false
 student:
   arch: vit_7b
@@ -163,6 +167,8 @@ checkpointing:
   period: 500
   max_to_keep: 3
   keep_every: 5000
+  save_format: torch       # 强制保存为 .pth 格式
+  save_full_state: false   # 只保存模型权重
 schedules:
   lr:
     start: 0

@@ -43,7 +43,7 @@ gram:
   compute_stats: false # (bool): if true compute auxilliary stats
 train:
   batch_size_per_gpu: 48
-  dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/ht2-nas2/00-model/00-wj/Data/tiff_test_data/test_tiff.txt
+  dataset_path: ChinasiweiDataset:root=/:list_file=/mnt/ht2-nas2/00-model/00-wj/Data/AID/aid.txt
   output_dir: ./work_dirs/vitl_swdata_pretrain
   saveckp_freq: 10
   seed: 0
