@@ -164,11 +164,11 @@ crops:
   - 0.156
   - 0.143
 checkpointing:
-  period: 500
+  period: 1000
   max_to_keep: 3
   keep_every: 5000
-  save_format: torch       # 强制保存为 .pth 格式
-  save_full_state: false   # 只保存模型权重
+  # save_format: torch       # 强制保存为 .pth 格式
+  # save_full_state: false   # 只保存模型权重
 schedules:
   lr:
     start: 0
@@ -195,3 +195,4 @@ futher_ssl:
   # enabled: false  # pretrain from scratch, loss higher than "enabled: true" setting
   enabled: true
   checkpoint_path: '/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vit7b16_pretrain_sat493m-a6675841.pth'
+  # checkpoint_path: '/mnt/ht2-nas2/00-model/00-wj/Codes/dinov3-sw/chinasiwei_fm/dinov3-main/work_dirs/finetune/dinov3_vit7b16_lora_finetune/ckpt/finetune_backbone_teacher.pth'
