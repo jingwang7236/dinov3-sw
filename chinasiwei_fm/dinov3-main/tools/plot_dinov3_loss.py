@@ -40,7 +40,7 @@ def parse_log(log_path):
     print(f"✅ 解析完成，共读取 {len(steps)} 个训练点")
     return steps, losses
 
-def plot_loss_curve(steps, losses, save_path="loss_curve.png"):
+def plot_loss_curve(steps, losses, save_path="loss_curve.png", task_name="DINOv3 Training Loss"):
     plt.style.use('default')
     fig, ax = plt.subplots(figsize=(13, 7))
 
@@ -67,7 +67,7 @@ def plot_loss_curve(steps, losses, save_path="loss_curve.png"):
     # 样式增强
     ax.set_xlabel("Training Steps", fontsize=13, weight='bold')
     ax.set_ylabel("Loss Value", fontsize=13, weight='bold')
-    ax.set_title("DINOv3 Training Loss (Auto-scaled for small changes)", fontsize=15, weight='bold')
+    ax.set_title(task_name, fontsize=15, weight='bold')
     ax.legend(fontsize=11, frameon=True, shadow=True)
     ax.grid(True, alpha=0.3, linestyle='--')
     plt.tight_layout()
@@ -81,10 +81,11 @@ def main():
     parser = argparse.ArgumentParser(description="绘制DINOv3训练loss曲线（自动放大微小变化）")
     parser.add_argument("--log", required=True, help="日志文件路径")
     parser.add_argument("--save", default="loss_curve.png", help="保存图片路径")
+    parser.add_argument("--task_name", default="dino loss", help="训练任务名称")
     args = parser.parse_args()
 
     steps, losses = parse_log(args.log)
-    plot_loss_curve(steps, losses, args.save)
+    plot_loss_curve(steps, losses, args.save, args.task_name)
 
 if __name__ == "__main__":
     main()

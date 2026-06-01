@@ -28,8 +28,8 @@ class DinoV3Backbone(BaseModule):
     
     def __init__(
         self,
-        # model_name='dinov3_vitl16',
-        model_name='dinov3_vitl16_chinasiwei',
+        model_name='dinov3_vitl16',
+        # model_name='dinov3_vitl16_chinasiwei',
         checkpoint_path=None,
         # checkpoint_path='/mnt/mty/open_source_mm/chinasiwei_fm/dinov3-main/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
         freeze_backbone=True,
@@ -44,7 +44,7 @@ class DinoV3Backbone(BaseModule):
     ):
         init_cfg=dict(type='Pretrained', checkpoint=checkpoint_path) if checkpoint_path else None
         super().__init__(init_cfg=init_cfg)
-        REPO_DIR = '/mnt/mty/open_source_mm/chinasiwei_fm/dinov3-main'
+        REPO_DIR = '/mnt/ht2-nas2/00-model/00-wj/Codes/dinov3-sw/chinasiwei_fm/dinov3-main'
 
         # self.encoder = torch.hub.load(REPO_DIR, model=model_name, source='local', pretrained=False)
         self.encoder = torch.hub.load(
