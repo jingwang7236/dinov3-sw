@@ -163,6 +163,7 @@ class DinoV3Backbone(BaseModule):
             )
         
         self.model_name = model_name
+        self.checkpoint_path = checkpoint_path
         self.model_config = self.MODEL_CONFIGS[model_name]
         self.embed_dim = self.model_config['embed_dim']
         self.depth = self.model_config['depth']
@@ -220,19 +221,20 @@ class DinoV3Backbone(BaseModule):
             # sys.path.insert(0, '/mnt/ht2-nas2/00-model/00-wj/Codes/dinov3-sw/chinasiwei_fm')
             
             # Create backbone based on model type
-            if 'large' in self.model_name or 'l16' in self.model_name:
+            # 可选: vit_large, vit_giant, vit_7b
+            if self.model_name == "vit_large":
                 self.backbone = vit_large(
                     patch_size=self.patch_size,
                     use_grad_checkpoint=self.use_grad_checkpoint,
                     **kwargs
                 )
-            elif 'giant' in self.model_name or 'g16' in self.model_name:
+            elif self.model_name == "vit_giant":
                 self.backbone = vit_giant(
                     patch_size=self.patch_size,
                     use_grad_checkpoint=self.use_grad_checkpoint,
                     **kwargs
                 )
-            elif '7b' in self.model_name:
+            elif self.model_name == "vit_7b":
                 self.backbone = vit_7b(
                     patch_size=self.patch_size,
                     use_grad_checkpoint=self.use_grad_checkpoint,
@@ -312,6 +314,7 @@ class DinoV3Backbone(BaseModule):
     
     def _freeze_backbone(self):
         """Freeze all backbone parameters."""
+        self.backbone.eval()
         for param in self.backbone.parameters():
             param.requires_grad = False
         print_log("DINOv3 backbone is frozen", logger='current')
@@ -451,10 +454,9 @@ class DinoV3Backbone(BaseModule):
         super().init_weights()
         
         # If we have init_cfg and it's a checkpoint, load it
-        if self.init_cfg and self.init_cfg.get('type') == 'Pretrained':
-            checkpoint = self.init_cfg.get('checkpoint')
-            if checkpoint:
-                self._load_weights(checkpoint)
+        if self.checkpoint_path:
+            self._load_weights(self.checkpoint_path)
+            print_log("Load params from checkpoint_path: {}".format(self.checkpoint_path), logger='current')
         else:
             # Random initialization
             print_log("Randomly initializing DINOv3 backbone", logger='current')

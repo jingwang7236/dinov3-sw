@@ -15,8 +15,6 @@ norm_cfg = dict(type='SyncBN', requires_grad=True)
 
 data_preprocessor = dict(
     type='SegDataPreProcessor',
-    # mean=[127.5, 127.5, 127.5],
-    # std=[127.5, 127.5, 127.5],
     mean=[123.675, 116.28, 103.53],  # ImageNet
     std=[58.395, 57.12, 57.375],
     bgr_to_rgb=True,
@@ -32,7 +30,7 @@ model = dict(
         type='DinoV3BackboneSimple',  # 或 'DinoV3Backbone'
         model_name='vit_large',  # 可选: vit_large, vit_giant, vit_7b
         checkpoint_path='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
-        freeze_backbone=False,  # True: 冻结, False: 微调
+        freeze_backbone=True,  # True: 冻结, False: 微调
         # out_indices=(5, 11, 17, 23),  # 自动根据模型深度选择
         # fpn=True,  # Simple版本默认开启
         # patch_size=16,
@@ -72,10 +70,23 @@ model = dict(
     test_cfg=dict(mode='slide', crop_size=(512, 512), stride=(480, 480)),
 )
 
-# optimizer = dict(lr=0.001, weight_decay=0.0)
-# optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
-train_dataloader = dict(batch_size=2)
-val_dataloader = dict(batch_size=1)
+# train_dataloader = dict(batch_size=2)
+# val_dataloader = dict(batch_size=1)
+
+train_dataloader = dict(
+    batch_size=4,
+    num_workers=8,
+    persistent_workers=True,
+    pin_memory=True,
+    sampler=dict(type='InfiniteSampler', shuffle=True),  # 无限采样器
+)
+
+val_dataloader = dict(
+    batch_size=4,
+    num_workers=4,
+    persistent_workers=True,
+    pin_memory=True,
+)
 
 # AdamW optimizer, no weight decay for position embedding & layer norm
 # in backbone
@@ -83,7 +94,7 @@ optim_wrapper = dict(
     # _delete_=True,
     type='OptimWrapper',
     optimizer=dict(
-        type='AdamW', lr=0.00006, betas=(0.9, 0.999), weight_decay=0.01),
+        type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.01),
     clip_grad=dict(max_norm=35, norm_type=1),
     paramwise_cfg=dict(
         custom_keys={
@@ -94,7 +105,11 @@ optim_wrapper = dict(
 
 param_scheduler = [
     dict(
-        type='LinearLR', start_factor=1e-6, by_epoch=False, begin=0, end=1500),
+        type='LinearLR', 
+        start_factor=1e-6, 
+        by_epoch=False, 
+        begin=0, 
+        end=1500),
     dict(
         type='PolyLR',
         eta_min=0.0,
@@ -113,6 +128,10 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=50, log_metric_by_epoch=False),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', by_epoch=False, interval=8000, save_best='mIoU'),
+    checkpoint=dict(type='CheckpointHook', 
+        by_epoch=False,
+        interval=8000,
+        save_best='mIoU',
+        max_keep_ckpts=3),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='SegVisualizationHook'))
