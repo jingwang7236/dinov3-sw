@@ -1,20 +1,13 @@
 _base_ = [
-    '_base_/default_runtime.py',
-    '_base_/datasets/geo_bench_neontree.py'
+    '../_base_/default_runtime.py',
+    '../_base_/datasets/geo_bench_neontree.py'
 ]
-
-custom_imports = dict(
-    imports=['mmpretrain.models.backbones.dinov3'],
-    allow_failed_imports=False
-)
 
 experiment_name = 'dinov3_sat493m_vit-l_uperhead_neontree_downstream'
 work_dir = f'./work_dirs/dinov3/geo_bench_neontree/{experiment_name}'
 
-
 crop_size = (512, 512)
 checkpoint = ''
-
 
 # model settings
 backbone_norm_cfg = dict(type='LN', eps=1e-6, requires_grad=True)
@@ -31,22 +24,20 @@ data_preprocessor = dict(
     seg_pad_val=255,
     size=crop_size)
 
-num_classes = 7
+num_classes = 1
 model = dict(
     type='EncoderDecoder',
     data_preprocessor=data_preprocessor,
-    pretrained=checkpoint,
     backbone=dict(
-        type='mmpretrain.DinoV3Backbone',
+        type='DinoV3BackboneSimple',  # 或 'DinoV3Backbone'
+        model_name='vit_large',  # 可选: vit_large, vit_giant, vit_7b
         checkpoint_path='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
-        # freeze_backbone=True,
-        # n_storage_tokens=0,
-        # mask_k_bias=False,
-        # untie_global_and_local_cls_norm=False,
-        freeze_backbone=False,
-        n_storage_tokens=4,
-        mask_k_bias=True,
-        untie_global_and_local_cls_norm=True,
+        freeze_backbone=False,  # True: 冻结, False: 微调
+        # out_indices=(5, 11, 17, 23),  # 自动根据模型深度选择
+        # fpn=True,  # Simple版本默认开启
+        # patch_size=16,
+        # img_size=512,
+        # use_grad_checkpoint=False,  # 内存不足时可开启
     ),
     neck=dict(
         type='MultiLevelNeck',
@@ -81,12 +72,9 @@ model = dict(
     test_cfg=dict(mode='slide', crop_size=(512, 512), stride=(480, 480)),
 )
 
-
-
-
 # optimizer = dict(lr=0.001, weight_decay=0.0)
 # optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
-train_dataloader = dict(batch_size=6)
+train_dataloader = dict(batch_size=2)
 val_dataloader = dict(batch_size=1)
 
 # AdamW optimizer, no weight decay for position embedding & layer norm
