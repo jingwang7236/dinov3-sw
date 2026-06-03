@@ -13,12 +13,12 @@ class GeoBenchNeonTree(BaseSegDataset):
     
     METAINFO = dict(
         classes=('background', 'tree'),
-        palette=[[0, 0, 0], [0, 0, 255]])
+        palette=[[0, 0, 0], [255, 255, 255]])
 
     def __init__(self,
                  img_suffix='.tif',
                  seg_map_suffix='.png',
-                 reduce_zero_label=True,
+                 reduce_zero_label=False,  # True: 这会将原始标签 0 转换为 -1（忽略）
                  **kwargs) -> None:
         super().__init__(
             img_suffix=img_suffix,

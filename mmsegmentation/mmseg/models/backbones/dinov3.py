@@ -11,15 +11,14 @@ Supports:
     - Backbone freezing/unfreezing
 """
 
-import warnings
-from typing import List, Optional, Tuple, Union
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
+from typing import List, Optional, Tuple, Union
+
 from mmengine.logging import print_log
 from mmengine.model import BaseModule
-from mmengine.runner.checkpoint import _load_checkpoint, load_checkpoint
 from mmseg.registry import MODELS
 
 
@@ -497,23 +496,6 @@ class DinoV3BackboneSimple(DinoV3Backbone):
             fpn=True,  # Enable FPN by default
             **kwargs
         )
-
-# dinov3/models/vision_transformer.py
-"""
-DINOv3 Vision Transformer Implementation
-
-Based on the official DINOv3 architecture with RoPE positional embeddings,
-LayerScale, and support for intermediate feature extraction.
-"""
-
-import math
-from functools import partial
-from typing import Optional, Tuple, Union, List
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
 
 
 def drop_path(x, drop_prob: float = 0.0, training: bool = False):

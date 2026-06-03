@@ -11,7 +11,7 @@ checkpoint = ''
 
 # model settings
 backbone_norm_cfg = dict(type='LN', eps=1e-6, requires_grad=True)
-norm_cfg = dict(type='SyncBN', requires_grad=True)
+norm_cfg = dict(type='BN', requires_grad=True)
 
 data_preprocessor = dict(
     type='SegDataPreProcessor',
@@ -22,7 +22,7 @@ data_preprocessor = dict(
     seg_pad_val=255,
     size=crop_size)
 
-num_classes = 1
+num_classes = 2
 model = dict(
     type='EncoderDecoder',
     data_preprocessor=data_preprocessor,
@@ -53,7 +53,13 @@ model = dict(
         norm_cfg=norm_cfg,
         align_corners=False,
         loss_decode=dict(
-            type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0)),
+            # use_sigmoid=False → 只支持 num_classes ≥ 2
+            type='CrossEntropyLoss',
+            use_sigmoid=False, 
+            loss_weight=1.0,
+            avg_non_ignore=True,  # 忽略 ignore_index 的区域
+        )
+    ),
     auxiliary_head=dict(
         type='FCNHead',
         in_channels=1024,
@@ -66,7 +72,12 @@ model = dict(
         norm_cfg=norm_cfg,
         align_corners=False,
         loss_decode=dict(
-            type='CrossEntropyLoss', use_sigmoid=False, loss_weight=0.4)),
+            type='CrossEntropyLoss', 
+            use_sigmoid=False, 
+            loss_weight=0.4,
+            avg_non_ignore=True,
+        )
+    ),
     test_cfg=dict(mode='slide', crop_size=(512, 512), stride=(480, 480)),
 )
 
@@ -74,15 +85,15 @@ model = dict(
 # val_dataloader = dict(batch_size=1)
 
 train_dataloader = dict(
-    batch_size=4,
-    num_workers=8,
+    batch_size=2,
+    num_workers=4,
     persistent_workers=True,
     pin_memory=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),  # 无限采样器
 )
 
 val_dataloader = dict(
-    batch_size=4,
+    batch_size=2,
     num_workers=4,
     persistent_workers=True,
     pin_memory=True,
