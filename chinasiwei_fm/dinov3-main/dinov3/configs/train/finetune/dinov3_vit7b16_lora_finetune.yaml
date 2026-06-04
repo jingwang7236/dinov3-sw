@@ -77,6 +77,8 @@ train:
   cell_augmentation_type: hpa
   sharded_eval_checkpoint: false
   channel_adaptive: false
+  sharded_eval_checkpoint: true  # 启用分片评估
+  evaluate_after_train: false    # 禁用训练中的评估,因为在评估时，为了聚合所有 GPU 上的模型权重，会导致显存溢出溢出
 student:
   arch: vit_7b
   patch_size: 16
