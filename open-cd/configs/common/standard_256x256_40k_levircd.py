@@ -1,7 +1,7 @@
 _base_ = '../_base_/default_runtime.py'
 
 dataset_type = 'LEVIR_CD_Dataset'
-data_root = 'data/LEVIR-CD'
+data_root = '/mnt/ht2-nas2/EO_test/dataset/ChangeDetection/LEVIR-CD'
 
 crop_size = (256, 256)
 train_pipeline = [
@@ -47,7 +47,7 @@ tta_pipeline = [
         ])
 ]
 train_dataloader = dict(
-    batch_size=8,
+    batch_size=16,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
@@ -55,9 +55,9 @@ train_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            seg_map_path='train/label',
-            img_path_from='train/A', 
-            img_path_to='train/B'),
+            seg_map_path='train/GT',
+            img_path_from='train/T1', 
+            img_path_to='train/T2'),
         pipeline=train_pipeline))
 val_dataloader = dict(
     batch_size=1,
@@ -68,9 +68,9 @@ val_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            seg_map_path='val/label',
-            img_path_from='val/A',
-            img_path_to='val/B'),
+            seg_map_path='val/GT',
+            img_path_from='val/T1',
+            img_path_to='val/T2'),
         pipeline=test_pipeline))
 test_dataloader = dict(
     batch_size=1,
@@ -81,9 +81,9 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            seg_map_path='test/label',
-            img_path_from='test/A',
-            img_path_to='test/B'),
+            seg_map_path='test/GT',
+            img_path_from='test/T1',
+            img_path_to='test/T2'),
         pipeline=test_pipeline))
 
 val_evaluator = dict(type='mmseg.IoUMetric', iou_metrics=['mFscore', 'mIoU'])
