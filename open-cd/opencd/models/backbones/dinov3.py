@@ -510,6 +510,7 @@ class RopePositionEmbedding(nn.Module):
     
     def forward(self, x: torch.Tensor, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Return cos and sin for the given sequence length."""
+        seq_len = min(seq_len, self.max_seq_len)
         return (
             self.cos_cached[:seq_len, :].to(x.device),
             self.sin_cached[:seq_len, :].to(x.device)
@@ -525,6 +526,9 @@ def rotate_half(x):
 def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
     """Apply RoPE to the input tensor."""
     # x shape: (batch, seq_len, num_heads, head_dim)
+    seq_len = x.shape[2]
+    cos = cos[:seq_len]
+    sin = sin[:seq_len]
     x_rotated = x * cos.unsqueeze(0).unsqueeze(0) + rotate_half(x) * sin.unsqueeze(0).unsqueeze(0)
     return x_rotated
 

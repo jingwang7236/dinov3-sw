@@ -18,22 +18,6 @@ model = dict(
     type='DIEncoderDecoder',  # 孪生网络结构
     data_preprocessor=data_preprocessor,
     pretrained=None,
-    # backbone=dict(
-    #     type='IA_ResNeSt',
-    #     depth=50,
-    #     num_stages=4,
-    #     out_indices=(0, 1, 2, 3),
-    #     dilations=(1, 1, 1, 1),
-    #     strides=(1, 2, 2, 2),
-    #     norm_cfg=norm_cfg,
-    #     norm_eval=False,
-    #     style='pytorch',
-    #     contract_dilation=True,
-    #     stem_channels=64,
-    #     radix=2,
-    #     reduction_factor=4,
-    #     avg_down_stride=True,
-    #     interaction_cfg=(None, None, None, None)),
     backbone=dict(
         type='SiameseDinoV3Backbone',
         model_name='vit_large',  # 可选: vit_large, vit_giant, vit_7b
@@ -75,11 +59,33 @@ train_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=48,
+    batch_size=24,  # 48 single gpu
     dataset=dict(pipeline=train_pipeline))
+
+test_pipeline = [
+    dict(type='MultiImgLoadImageFromFile'),
+    dict(type='MultiImgResize', scale=crop_size, keep_ratio=True),
+    dict(type='MultiImgLoadAnnotations'),
+    dict(type='MultiImgPackSegInputs')
+]
+
+val_dataloader = dict(
+    batch_size=1,
+    num_workers=4,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(pipeline=test_pipeline))
+test_dataloader = dict(
+    batch_size=1,
+    num_workers=4,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(pipeline=test_pipeline))
 
 optimizer=dict(
     type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.05)
 optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 
 # compile = True # use PyTorch 2.x
+
+train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=4000)
