@@ -6,10 +6,14 @@
 # --work-dir work_dirs/changer_ex_s101_512x512_40k_levircd
 
 # backbone 替换为dinov3，冻结权重；
-CUDA_VISIBLE_DEVICES=3 python tools/train.py configs/changedino/changedino_base_512x512_40k_levircd.py \
---work-dir work_dirs/changedino_base_512x512_40k_levircd
+# CUDA_VISIBLE_DEVICES=3 python tools/train.py configs/changedino/changedino_base_512x512_40k_levircd.py \
+# --work-dir work_dirs/changedino_base_512x512_40k_levircd
 
 # 测试模型
 # TORCH_LOAD_WEIGHTS_ONLY=0 python tools/test.py \
 # configs/changedino/changedino_base_512x512_40k_levircd.py \
 # work_dirs/changedino_base_512x512_40k_levircd/iter_4000.pth
+
+
+CUDA_VISIBLE_DEVICES=5 python tools/train.py configs/changedino/changedino_standard_512x512_40k_levircd.py \
+--work-dir work_dirs/changedino_standard_512x512_40k_levircd

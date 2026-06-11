@@ -1,4 +1,5 @@
 _base_ = [
+    # '../_base_/models/changer_s50.py', 
     '../common/standard_512x512_40k_levircd.py']
 
 crop_size = (512, 512)
@@ -14,30 +15,36 @@ data_preprocessor = dict(
     seg_pad_val=255,
     test_cfg=dict(size_divisor=32))
 model = dict(
-    type='DIEncoderDecoder',  # 孪生网络结构
+    type='ChangeDinoEncoderDecoder',  # TODO：ChangeDino网络结构，待开发
     data_preprocessor=data_preprocessor,
-    pretrained=None,
     backbone=dict(
-        type='SiameseDinoV3Backbone',
-        model_name='vit_large',  # 可选: vit_large, vit_giant, vit_7b
-        checkpoint_path='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
-        freeze_backbone=True,  # 训练后期可以考虑解冻后1-2层训练
-        fpn=True,
-        patch_size=16,
-        img_size=512,
-        use_grad_checkpoint=True,  # 内存不足时可开启
+        type='ChangeDinoEncoder',
+        backbone="mobilenetv2",
+        fpn_channels=128,
+        extract_ids=[5, 11, 17, 23],
+        dino_weight='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
     ),
     decode_head=dict(
-        type='Changer',
-        in_channels=[1024, 1024, 1024, 1024],
-        in_index=[0, 1, 2, 3],
-        channels=256,
-        dropout_ratio=0.1,
+        type='ChangeDinoDecoder',
+        fpn_channels=128,
+        n_layers=[1, 1, 1, 1],
         num_classes=2,
-        norm_cfg=norm_cfg,
         align_corners=False,
         loss_decode=dict(
-            type='mmseg.CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0)),
+            type='mmseg.CrossEntropyLoss',
+            use_sigmoid=False,
+            loss_weight=1.0,
+            avg_non_ignore=True,
+            ignore_index=255  # 添加这行
+        ),
+    # 可选：后处理模块
+    refiner=dict(
+        type='LearnableSoftMorph',
+        k_open=3,
+        k_close=5,
+        tau=0.05,
+        ),
+    ),
     # model training and testing settings
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
@@ -58,7 +65,7 @@ train_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=24,  # 48 single gpu
+    batch_size=8,
     dataset=dict(pipeline=train_pipeline))
 
 test_pipeline = [

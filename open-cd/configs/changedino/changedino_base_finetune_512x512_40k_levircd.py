@@ -21,7 +21,7 @@ model = dict(
         type='SiameseDinoV3Backbone',
         model_name='vit_large',  # 可选: vit_large, vit_giant, vit_7b
         checkpoint_path='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
-        freeze_backbone=True,  # 训练后期可以考虑解冻后1-2层训练
+        freeze_backbone=False,  # 训练后期可以考虑解冻后1-2层训练
         fpn=True,
         patch_size=16,
         img_size=512,
@@ -58,7 +58,7 @@ train_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=24,  # 48 single gpu
+    batch_size=4,
     dataset=dict(pipeline=train_pipeline))
 
 test_pipeline = [
