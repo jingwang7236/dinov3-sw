@@ -9,11 +9,11 @@ from opencd.registry import MODELS
 
 class FuseGated(nn.Module):
     """Gated fusion module for multi-scale features."""
-    
+
     def __init__(self, dim: int):
         super().__init__()
         self.gate = nn.Sequential(
-            nn.Conv2d(2 * dim, dim, 1, bias=True), 
+            nn.Conv2d(2 * dim, dim, 1, bias=True),
             nn.Sigmoid()
         )
         self.mix = nn.Sequential(
@@ -25,9 +25,7 @@ class FuseGated(nn.Module):
     def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
         if x1.shape[-2:] != x2.shape[-2:]:
             x1 = F.interpolate(
-                x1, size=x2.shape[-2:], 
-                mode="bilinear", 
-                align_corners=False
+                x1, size=x2.shape[-2:], mode="bilinear", align_corners=False
             )
         g = self.gate(torch.cat([x1, x2], dim=1))
         fused = x2 + g * x1
@@ -36,49 +34,72 @@ class FuseGated(nn.Module):
 
 @MODELS.register_module()
 class ChangeDinoDecoder(nn.Module):
-    """
-    ChangeDino Decoder for SiamEncoderDecoder.
-    
-    兼容父类 SiamEncoderDecoder 所需的属性：
-        - align_corners: 插值时是否对齐角点
-        - num_classes: 分割类别数
-        - out_channels: 输出通道数（等于 num_classes）
-        - loss: 计算损失的方法
-        - predict: 推理方法
-    
+    """ChangeDino Decoder.
+
+    实现 ChangeDino 的多尺度差异特征提取与变化检测预测。
+    兼容 SiamEncoderDecoder 父类的调用规范，提供:
+    - forward(feats1, feats2): 多尺度特征提取
+    - loss(feats1, feats2, data_samples, train_cfg): 计算训练损失
+    - predict(feats1, feats2, batch_img_metas, test_cfg): 推理预测
+    - _forward(feats1, feats2): 纯前向（用于 tensor mode）
+
     Args:
-        fpn_channels (int): Number of channels from FPN backbone.
-        n_layers (List[int]): Number of transformer blocks at each scale.
-        num_classes (int): Number of segmentation classes (default: 2).
-        align_corners (bool): Align corners in interpolation (default: False).
-        decode_head (dict, optional): Additional decode head config.
-        **kwargs: Additional arguments.
+        fpn_channels (int): FPN 特征通道数 (default: 128)
+        n_layers (List[int]): 各尺度 Transformer 块数量 (default: [1,1,1,1])
+        num_classes (int): 分割类别数 (default: 2)
+        align_corners (bool): 插值是否对齐角点
+        aux_loss_weights (dict): 辅助损失权重 (default: p3=0.4, p4=0.3, p5=0.1)
+        ignore_index (int): 损失计算中忽略的标签 (default: 255)
+        loss_decode (dict, optional): 主损失配置
     """
-    
+
     def __init__(
         self,
         fpn_channels: int = 128,
         n_layers: List[int] = [1, 1, 1, 1],
         num_classes: int = 2,
         align_corners: bool = False,
+        aux_loss_weights: dict = None,
+        ignore_index: int = 255,
+        loss_decode: Optional[dict] = None,
         **kwargs,
     ):
         super().__init__()
-        
-        # ========== 父类要求的属性 ==========
+
+        # ========== 父类/框架要求的属性 ==========
         self.align_corners = align_corners
         self.num_classes = num_classes
         self.out_channels = num_classes
-        
+        self.ignore_index = ignore_index
+
+        # 辅助损失权重
+        self.aux_loss_weights = aux_loss_weights or {
+            'p3': 0.4, 'p4': 0.3, 'p5': 0.1
+        }
+
+        # 损失函数：优先使用 loss_decode 配置，否则使用默认
+        if loss_decode is not None:
+            from mmseg.models.losses import CrossEntropyLoss
+            self.loss_fn = CrossEntropyLoss(
+                use_sigmoid=loss_decode.get('use_sigmoid', False),
+                loss_weight=loss_decode.get('loss_weight', 1.0),
+                avg_non_ignore=loss_decode.get('avg_non_ignore', True),
+            )
+        else:
+            from mmseg.models.losses import CrossEntropyLoss
+            self.loss_fn = CrossEntropyLoss(
+                use_sigmoid=False, loss_weight=1.0, avg_non_ignore=True
+            )
+
         # ========== 模型参数 ==========
         self.fpn_channels = fpn_channels
         self.n_layers = n_layers
-        
-        # ========== 特征融合模块 ==========
+
+        # ========== 特征融合模块（自顶向下） ==========
         self.p5_to_p4 = FuseGated(fpn_channels)
         self.p4_to_p3 = FuseGated(fpn_channels)
         self.p3_to_p2 = FuseGated(fpn_channels)
-        
+
         # ========== 各尺度的 Transformer 模块 ==========
         self.tb5 = self._build_transformer_blocks(
             fpn_channels, "CDA", n_layers[0], depth=3
@@ -87,32 +108,27 @@ class ChangeDinoDecoder(nn.Module):
             fpn_channels, "CDA", n_layers[1], depth=3
         )
         self.tb3 = self._build_transformer_blocks(
-            fpn_channels, "OCDA", n_layers[2], depth=2, 
+            fpn_channels, "OCDA", n_layers[2], depth=2,
             window_size=8, overlap_ratio=0.5
         )
         self.tb2 = self._build_transformer_blocks(
             fpn_channels, "OCDA", n_layers[3], depth=1,
             window_size=8, overlap_ratio=0.5
         )
-        
+
         # ========== 预测头 ==========
         self.p5_head = nn.Conv2d(fpn_channels, num_classes, 1)
         self.p4_head = nn.Conv2d(fpn_channels, num_classes, 1)
         self.p3_head = nn.Conv2d(fpn_channels, num_classes, 1)
         self.p2_head = nn.Conv2d(fpn_channels, num_classes, 1)
-    
+
     def _build_transformer_blocks(
-        self, 
-        dim: int, 
-        attn_type: str, 
-        num_blocks: int, 
-        depth: int,
-        **extra_kwargs
+        self, dim: int, attn_type: str, num_blocks: int,
+        depth: int, **extra_kwargs
     ) -> nn.Module:
         """构建 Transformer 块序列。"""
         if num_blocks == 0:
             return nn.Identity()
-        
         blocks = []
         for _ in range(num_blocks):
             block_kwargs = {
@@ -127,35 +143,37 @@ class ChangeDinoDecoder(nn.Module):
                 **extra_kwargs
             }
             blocks.append(TransformerBlock(**block_kwargs))
-        
         return nn.Sequential(*blocks)
-    
+
     def _compute_diff(self, t1: torch.Tensor, t2: torch.Tensor) -> torch.Tensor:
         """计算双时相特征的差异。"""
         return torch.abs(t1 - t2)
-    
-    def forward(self, x1s, x2s, size=None):
-        """
-        前向传播，返回多尺度特征（用于 extract_feat）。
-        
+
+    # ------------------------------------------------------------------
+    # 核心前向：提取多尺度差异特征
+    # ------------------------------------------------------------------
+    def extract_feats(
+        self, x1s: List[torch.Tensor], x2s: List[torch.Tensor]
+    ) -> List[torch.Tensor]:
+        """提取多尺度差异特征（ChangeDino 核心逻辑）。
+
         Args:
-            x1s: Features from time 1 (p2, p3, p4, p5)
-            x2s: Features from time 2 (p2, p3, p4, p5)
-        
+            x1s: 时相1的多尺度特征 [p2, p3, p4, p5]
+            x2s: 时相2的多尺度特征 [p2, p3, p4, p5]
+
         Returns:
-            List of multi-scale feature tensors [feat_p2, feat_p3, feat_p4, feat_p5]
+            多尺度差异特征 [feat_p2, feat_p3, feat_p4, feat_p5]
         """
-        # 解包特征
         t1_p2, t1_p3, t1_p4, t1_p5 = x1s
         t2_p2, t2_p3, t2_p4, t2_p5 = x2s
-        
+
         # 计算差异特征
         diff_p5 = self._compute_diff(t1_p5, t2_p5)
         diff_p4 = self._compute_diff(t1_p4, t2_p4)
         diff_p3 = self._compute_diff(t1_p3, t2_p3)
         diff_p2 = self._compute_diff(t1_p2, t2_p2)
-        
-        # 自顶向下处理
+
+        # 自顶向下融合处理
         feat_p5 = self.tb5(diff_p5)
         feat_p4 = self.p5_to_p4(feat_p5, diff_p4)
         feat_p4 = self.tb4(feat_p4)
@@ -163,89 +181,173 @@ class ChangeDinoDecoder(nn.Module):
         feat_p3 = self.tb3(feat_p3)
         feat_p2 = self.p3_to_p2(feat_p3, diff_p2)
         feat_p2 = self.tb2(feat_p2)
-        
-        # 返回多尺度特征（用于后续 decode_head 的 forward）
+
         return [feat_p2, feat_p3, feat_p4, feat_p5]
-    
-    def loss(self, inputs: List[torch.Tensor], data_samples: List, train_cfg: Optional[dict] = None) -> dict:
-        """
-        计算损失（父类 SiamEncoderDecoder 要求的方法）。
-        
+
+    def _get_predictions(
+        self, feats: List[torch.Tensor]
+    ) -> Tuple[torch.Tensor, ...]:
+        """从多尺度特征生成各尺度的预测 logits。
+
         Args:
-            inputs: 来自 backbone 的多尺度特征 [feat_p2, feat_p3, feat_p4, feat_p5]
+            feats: [feat_p2, feat_p3, feat_p4, feat_p5]
+
+        Returns:
+            (pred_p2, pred_p3, pred_p4, pred_p5) 各尺度 logits
+        """
+        pred_p2 = self.p2_head(feats[0])
+        pred_p3 = self.p3_head(feats[1])
+        pred_p4 = self.p4_head(feats[2])
+        pred_p5 = self.p5_head(feats[3])
+        return pred_p2, pred_p3, pred_p4, pred_p5
+
+    def _parse_gt(self, data_samples: List) -> torch.Tensor:
+        """从 data_samples 中解析 ground truth 标签。
+
+        Args:
+            data_samples: 数据样本列表
+
+        Returns:
+            gt_label_tensor: 形状 (B, H, W) 的 long tensor
+        """
+        gt_list = [d.gt_sem_seg.data for d in data_samples]
+        gt_label_tensor = torch.cat(gt_list).long()
+        if gt_label_tensor.ndim == 4 and gt_label_tensor.shape[1] == 1:
+            gt_label_tensor = gt_label_tensor.squeeze(1)
+        return gt_label_tensor
+
+    # ------------------------------------------------------------------
+    # forward: 对外暴露的通用前向接口
+    # ------------------------------------------------------------------
+    def forward(self, x1s, x2s, size=None):
+        """前向传播，返回多尺度差异特征。
+
+        Args:
+            x1s: 时相1特征 (p2, p3, p4, p5)
+            x2s: 时相2特征 (p2, p3, p4, p5)
+            size: 保留参数
+
+        Returns:
+            [feat_p2, feat_p3, feat_p4, feat_p5]
+        """
+        return self.extract_feats(x1s, x2s)
+
+    # ------------------------------------------------------------------
+    # loss: 训练损失计算（符合父类 decode_head.loss 调用规范）
+    # ------------------------------------------------------------------
+    def loss(
+        self,
+        feats1: List[torch.Tensor],
+        feats2: List[torch.Tensor],
+        data_samples: List,
+        train_cfg: Optional[dict] = None,
+    ) -> dict:
+        """计算训练损失。
+
+        Args:
+            feats1: 时相1的多尺度特征
+            feats2: 时相2的多尺度特征
             data_samples: 数据样本列表，包含 ground truth
             train_cfg: 训练配置（可选）
-        
+
         Returns:
-            损失字典
+            损失字典 {'loss_ce': ..., 'loss_aux_p3': ..., ...}
         """
-        from mmseg.models import build_loss
-        from mmseg.models.losses import CrossEntropyLoss
-        
-        # 获取输入特征
-        feat_p2, feat_p3, feat_p4, feat_p5 = inputs
-        
-        # 计算各尺度的预测
-        pred_p5 = self.p5_head(feat_p5)
-        pred_p4 = self.p4_head(feat_p4)
-        pred_p3 = self.p3_head(feat_p3)
-        pred_p2 = self.p2_head(feat_p2)
-        
-        # 获取目标尺寸（与输入图像一致）
-        target_size = data_samples[0].gt_sem_seg.shape[-2:] if data_samples else (512, 512)
-        
-        # 上采样到目标尺寸
-        pred_p2 = F.interpolate(pred_p2, size=target_size, mode="bilinear", align_corners=self.align_corners)
-        pred_p3 = F.interpolate(pred_p3, size=target_size, mode="bilinear", align_corners=self.align_corners)
-        pred_p4 = F.interpolate(pred_p4, size=target_size, mode="bilinear", align_corners=self.align_corners)
-        pred_p5 = F.interpolate(pred_p5, size=target_size, mode="bilinear", align_corners=self.align_corners)
-        
-        # 使用 CrossEntropyLoss 计算损失
-        loss_fn = CrossEntropyLoss(use_sigmoid=False, loss_weight=1.0)
-        
+        # 1. 提取差异特征
+        feats = self.extract_feats(feats1, feats2)
+
+        # 2. 各尺度预测
+        pred_p2, pred_p3, pred_p4, pred_p5 = self._get_predictions(feats)
+
+        # 3. 解析 GT
+        gt_label_tensor = self._parse_gt(data_samples)
+        target_size = gt_label_tensor.shape[-2:]
+
+        # 4. 上采样预测到 GT 尺寸
+        pred_p2 = F.interpolate(
+            pred_p2, size=target_size, mode="bilinear",
+            align_corners=self.align_corners)
+        pred_p3 = F.interpolate(
+            pred_p3, size=target_size, mode="bilinear",
+            align_corners=self.align_corners)
+        pred_p4 = F.interpolate(
+            pred_p4, size=target_size, mode="bilinear",
+            align_corners=self.align_corners)
+        pred_p5 = F.interpolate(
+            pred_p5, size=target_size, mode="bilinear",
+            align_corners=self.align_corners)
+
+        # 5. 计算损失
         losses = {}
-        
-        # 主损失（使用最高分辨率 p2）
-        losses['loss_ce'] = loss_fn(pred_p2, data_samples)
-        
-        # 辅助损失（深度监督）
-        aux_weights = {'p3': 0.5, 'p4': 0.3, 'p5': 0.1}
-        for name, pred, weight in [('p3', pred_p3, 0.5), ('p4', pred_p4, 0.3), ('p5', pred_p5, 0.1)]:
+
+        # 主损失 (p2, 最高分辨率)
+        losses['loss_ce'] = self.loss_fn(
+            pred_p2, gt_label_tensor, ignore_index=self.ignore_index
+        )
+
+        # 辅助损失 (深度监督)
+        aux_preds = {'p3': pred_p3, 'p4': pred_p4, 'p5': pred_p5}
+        for name, pred in aux_preds.items():
+            weight = self.aux_loss_weights.get(name, 0.0)
             if weight > 0:
-                losses[f'loss_aux_{name}'] = loss_fn(pred, data_samples) * weight
-        
+                losses[f'loss_aux_{name}'] = self.loss_fn(
+                    pred, gt_label_tensor, ignore_index=self.ignore_index
+                ) * weight
+
         return losses
-    
-    def predict(self, inputs: List[torch.Tensor], batch_img_metas: List[dict], test_cfg: Optional[dict] = None) -> torch.Tensor:
-        """
-        推理方法（父类 SiamEncoderDecoder 要求的方法）。
-        
+
+    # ------------------------------------------------------------------
+    # predict: 推理预测（符合父类 decode_head.predict 调用规范）
+    # ------------------------------------------------------------------
+    def predict(
+        self,
+        feats1: List[torch.Tensor],
+        feats2: List[torch.Tensor],
+        batch_img_metas: List[dict],
+        test_cfg: Optional[dict] = None,
+    ) -> torch.Tensor:
+        """推理预测，返回最高分辨率的分割 logits。
+
         Args:
-            inputs: 来自 backbone 的多尺度特征 [feat_p2, feat_p3, feat_p4, feat_p5]
+            feats1: 时相1的多尺度特征
+            feats2: 时相2的多尺度特征
             batch_img_metas: 图像元信息列表
             test_cfg: 测试配置（可选）
-        
+
         Returns:
-            seg_logits: 分割 logits，形状 (N, C, H, W)
+            seg_logits: 形状 (N, C, H, W) 的分割 logits
         """
-        # 获取输入特征
-        feat_p2, feat_p3, feat_p4, feat_p5 = inputs
-        
-        # 计算各尺度的预测
-        pred_p5 = self.p5_head(feat_p5)
-        pred_p4 = self.p4_head(feat_p4)
-        pred_p3 = self.p3_head(feat_p3)
-        pred_p2 = self.p2_head(feat_p2)
-        
-        # 获取目标尺寸（从图像元信息中获取）
+        # 1. 提取差异特征
+        feats = self.extract_feats(feats1, feats2)
+
+        # 2. 最高分辨率预测
+        pred_p2 = self.p2_head(feats[0])
+
+        # 3. 上采样到原始图像尺寸
         ori_shape = batch_img_metas[0]['ori_shape']
-        target_size = ori_shape
-        
-        # 上采样到原始图像尺寸
-        pred_p2 = F.interpolate(pred_p2, size=target_size, mode="bilinear", align_corners=self.align_corners)
-        pred_p3 = F.interpolate(pred_p3, size=target_size, mode="bilinear", align_corners=self.align_corners)
-        pred_p4 = F.interpolate(pred_p4, size=target_size, mode="bilinear", align_corners=self.align_corners)
-        pred_p5 = F.interpolate(pred_p5, size=target_size, mode="bilinear", align_corners=self.align_corners)
-        
-        # 返回最高分辨率的预测作为最终输出
-        return pred_p2,pred_p3,pred_p4,pred_p5
+        pred_p2 = F.interpolate(
+            pred_p2, size=ori_shape, mode="bilinear",
+            align_corners=self.align_corners
+        )
+
+        return pred_p2
+
+    # ------------------------------------------------------------------
+    # _forward: 纯前向（tensor mode，不计算损失）
+    # ------------------------------------------------------------------
+    def _forward(
+        self,
+        feats1: List[torch.Tensor],
+        feats2: List[torch.Tensor],
+    ) -> Tuple[torch.Tensor, ...]:
+        """纯前向传播，返回多尺度预测 logits（用于 tensor mode）。
+
+        Args:
+            feats1: 时相1的多尺度特征
+            feats2: 时相2的多尺度特征
+
+        Returns:
+            (pred_p2, pred_p3, pred_p4, pred_p5) 各尺度 logits
+        """
+        feats = self.extract_feats(feats1, feats2)
+        return self._get_predictions(feats)

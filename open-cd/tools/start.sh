@@ -15,5 +15,5 @@
 # work_dirs/changedino_base_512x512_40k_levircd/iter_4000.pth
 
 
-CUDA_VISIBLE_DEVICES=5 python tools/train.py configs/changedino/changedino_standard_512x512_40k_levircd.py \
+CUDA_VISIBLE_DEVICES=1 python tools/train.py configs/changedino/changedino_standard_512x512_40k_levircd.py \
 --work-dir work_dirs/changedino_standard_512x512_40k_levircd
