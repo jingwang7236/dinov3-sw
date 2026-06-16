@@ -1,5 +1,5 @@
+# 在changedino_standard_512x512_40k_levircd.py基础上，只保留backbone中的dino模型，并开发后两层迭代的功能
 _base_ = [
-    # '../_base_/models/changer_s50.py', 
     '../common/standard_512x512_40k_levircd.py']
 
 crop_size = (512, 512)
@@ -18,11 +18,14 @@ model = dict(
     type='ChangeDinoEncoderDecoder',  # ChangeDino网络结构,同论文
     data_preprocessor=data_preprocessor,
     backbone=dict(
-        type='ChangeDinoEncoder',
-        backbone="mobilenetv2",
-        fpn_channels=128,
+        type='ChangeDinoEncoderOnlyDino',
+        out_channels=128,
         extract_ids=[5, 11, 17, 23],
         dino_weight='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
+        freeze_mode="frozen",  # default: frozen
+        # freeze_mode="full_finetune",
+        # freeze_mode="unfreeze_last_n",
+        # unfreeze_layers=4,  # 解冻最后 4 层
     ),
     decode_head=dict(
         type='ChangeDinoDecoder',
@@ -65,7 +68,7 @@ train_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=8,
+    batch_size=32,
     dataset=dict(pipeline=train_pipeline))
 
 test_pipeline = [

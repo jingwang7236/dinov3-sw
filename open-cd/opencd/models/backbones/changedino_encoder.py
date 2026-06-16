@@ -77,3 +77,25 @@ class ChangeDinoEncoder(nn.Module):
 
         return fea
 
+@MODELS.register_module()
+class ChangeDinoEncoderOnlyDino(nn.Module):
+    def __init__(
+        self,
+        out_channels=128,
+        dino_weight="/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth",
+        device="cuda",
+        extract_ids=[5, 11, 17, 23],
+        **kwargs,
+    ):
+        super().__init__()
+        self.dino = DINOV3Wrapper(
+            weights_path=dino_weight, device=device, extract_ids=extract_ids
+        )
+        self.dense_adp = DenseAdapterLite(
+            in_dim=1024, out_dim=out_channels, bottleneck=out_channels // 2
+        )
+
+    def forward(self, x):
+        ds_fea = self.dino(x)
+        ds_fea = self.dense_adp(ds_fea)
+        return ds_fea

@@ -21,6 +21,20 @@ MODEL_TO_NUM_LAYERS = {
 }
 
 class DINOV3Wrapper(nn.Module):
+    """
+    DINOv3 特征提取器包装类，支持灵活的权重训练策略。
+    
+    Args:
+        weights_path (str): 预训练权重路径
+        extract_ids (List[int]): 要提取的中间层索引
+        device (str): 设备类型
+        freeze_mode (str): 权重训练模式，可选:
+            - 'frozen': 完全冻结（默认）
+            - 'unfreeze_last_n': 解冻最后 N 层
+            - 'full_finetune': 全量微调
+        unfreeze_layers (int): 当 freeze_mode='unfreeze_last_n' 时，解冻的层数
+        verbose (bool): 是否打印详细信息
+    """
     def __init__(
         self,
         weights_path="/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth",
@@ -28,9 +42,13 @@ class DINOV3Wrapper(nn.Module):
         # TODO: 暂时无法关闭自动下载，后续尝试使用本地下载的权重
         extract_ids=[5, 11, 17, 23],
         device="cuda",
+        freeze_mode: str = "frozen",  # 'frozen', 'unfreeze_last_n', 'full_finetune'
+        unfreeze_layers: int = 2
     ):
         super().__init__()
         self.device = device
+        self.freeze_mode = freeze_mode
+        self.unfreeze_layers = unfreeze_layers
         self.model = torch.hub.load(
             REPO_DIR,
             DINO_NAME,
@@ -46,9 +64,61 @@ class DINOV3Wrapper(nn.Module):
         self.extract_ids = extract_ids
 
         # freeze the backbone
-        for p in self.model.parameters():
-            p.requires_grad = False
+        # for p in self.model.parameters():
+        #     p.requires_grad = False
 
+        self._apply_freeze_strategy()
+
+    def _apply_freeze_strategy(self):
+        """根据 freeze_mode 应用不同的权重训练策略"""
+        
+        if self.freeze_mode == "frozen":
+            # 完全冻结
+            self._freeze_all()
+            
+        elif self.freeze_mode == "full_finetune":
+            # 全量微调
+            self._unfreeze_all()
+            
+        elif self.freeze_mode == "unfreeze_last_n":
+            # 解冻最后 N 层
+            self._freeze_all()
+            self._unfreeze_last_n_layers(self.unfreeze_layers)
+            
+        else:
+            raise ValueError(
+                f"Unsupported freeze_mode: {self.freeze_mode}. "
+                f"Supported modes: 'frozen', 'unfreeze_last_n', 'full_finetune'"
+            )
+    def _freeze_all(self):
+        """冻结所有参数"""
+        for param in self.model.parameters():
+            param.requires_grad = False
+        print("🔒 DINOv3: All layers frozen")
+    
+    def _unfreeze_all(self):
+        """解冻所有参数"""
+        for param in self.model.parameters():
+            param.requires_grad = True
+        print("🔓 DINOv3: All layers unfrozen (full finetune)")
+    
+    def _unfreeze_last_n_layers(self, n: int):
+        """解冻最后 N 层 Transformer blocks"""
+        total_blocks = len(self.model.blocks)
+        start_idx = max(0, total_blocks - n)
+        
+        # 解冻指定的 blocks
+        for i in range(start_idx, total_blocks):
+            for param in self.model.blocks[i].parameters():
+                param.requires_grad = True
+        
+        # 同时解冻最后的 LayerNorm
+        if hasattr(self.model, 'norm'):
+            for param in self.model.norm.parameters():
+                param.requires_grad = True
+        
+        print(f"🔓 DINOv3: Unfrozen last {n} layers (blocks {start_idx}-{total_blocks-1})")
+    
     def forward(self, x):
         scale_factor = 2 / (512 / x.shape[-1])
         x = F.interpolate(
