@@ -6,6 +6,7 @@ from typing import List, Tuple, Optional, Union
 from opencd.models.blocks import TransformerBlock
 from opencd.registry import MODELS
 
+from opencd.models.losses import DICELoss, FocalLoss
 
 class FuseGated(nn.Module):
     """Gated fusion module for multi-scale features."""
@@ -50,7 +51,6 @@ class ChangeDinoDecoder(nn.Module):
         align_corners (bool): 插值是否对齐角点
         aux_loss_weights (dict): 辅助损失权重 (default: p3=0.4, p4=0.3, p5=0.1)
         ignore_index (int): 损失计算中忽略的标签 (default: 255)
-        loss_decode (dict, optional): 主损失配置
     """
 
     def __init__(
@@ -61,7 +61,6 @@ class ChangeDinoDecoder(nn.Module):
         align_corners: bool = False,
         aux_loss_weights: dict = None,
         ignore_index: int = 255,
-        loss_decode: Optional[dict] = None,
         **kwargs,
     ):
         super().__init__()
@@ -71,26 +70,29 @@ class ChangeDinoDecoder(nn.Module):
         self.num_classes = num_classes
         self.out_channels = num_classes
         self.ignore_index = ignore_index
-
-        # 辅助损失权重
-        self.aux_loss_weights = aux_loss_weights or {
-            'p3': 0.4, 'p4': 0.3, 'p5': 0.1
+        # Focal Loss
+        self.focal_loss = FocalLoss(
+            alpha=0.25,
+            gamma=2.0,
+            ignore_index=ignore_index
+        )
+        # Dice Loss
+        self.dice_loss = DICELoss(
+            ignore_index=ignore_index
+        )
+        # 各尺度损失权重
+        self.aux_focal_weights = {
+            'p2': 1.0,
+            'p3': 0.5,
+            'p4': 0.3,
+            'p5': 0.2,
         }
-
-        # 损失函数：优先使用 loss_decode 配置，否则使用默认
-        if loss_decode is not None:
-            from mmseg.models.losses import CrossEntropyLoss
-            self.loss_fn = CrossEntropyLoss(
-                use_sigmoid=loss_decode.get('use_sigmoid', False),
-                loss_weight=loss_decode.get('loss_weight', 1.0),
-                avg_non_ignore=loss_decode.get('avg_non_ignore', True),
-            )
-        else:
-            from mmseg.models.losses import CrossEntropyLoss
-            self.loss_fn = CrossEntropyLoss(
-                use_sigmoid=False, loss_weight=1.0, avg_non_ignore=True
-            )
-
+        self.aux_dice_weights = {
+            'p2': 1.0,
+            'p3': 0.5,
+            'p4': 0.3,
+            'p5': 0.2,
+        }
         # ========== 模型参数 ==========
         self.fpn_channels = fpn_channels
         self.n_layers = n_layers
@@ -276,26 +278,32 @@ class ChangeDinoDecoder(nn.Module):
         pred_p5 = F.interpolate(
             pred_p5, size=target_size, mode="bilinear",
             align_corners=self.align_corners)
-
+        
         # 5. 计算损失
+        scale_preds = {
+            'p2': pred_p2,
+            'p3': pred_p3,
+            'p4': pred_p4,
+            'p5': pred_p5,
+        }
+        total_focal = 0.0
+        total_dice = 0.0
+
+        # return losses
+        for name, pred in scale_preds.items():
+            focal_weight = self.aux_focal_weights.get(name, 0.0)
+            dice_weight = self.aux_dice_weights.get(name, 0.0)
+            
+            if focal_weight > 0:
+                total_focal += self.focal_loss(pred, gt_label_tensor) * focal_weight
+            if dice_weight > 0:
+                total_dice += self.dice_loss(pred, gt_label_tensor) * dice_weight
+        
+        # 总损失 = Focal + Dice
         losses = {}
-
-        # 主损失 (p2, 最高分辨率)
-        losses['loss_ce'] = self.loss_fn(
-            pred_p2, gt_label_tensor, ignore_index=self.ignore_index
-        )
-
-        # 辅助损失 (深度监督)
-        aux_preds = {'p3': pred_p3, 'p4': pred_p4, 'p5': pred_p5}
-        for name, pred in aux_preds.items():
-            weight = self.aux_loss_weights.get(name, 0.0)
-            if weight > 0:
-                losses[f'loss_aux_{name}'] = self.loss_fn(
-                    pred, gt_label_tensor, ignore_index=self.ignore_index
-                ) * weight
-
+        losses['loss_focal'] = total_focal
+        losses['loss_dice'] = total_dice
         return losses
-
     # ------------------------------------------------------------------
     # predict: 推理预测（符合父类 decode_head.predict 调用规范）
     # ------------------------------------------------------------------
@@ -324,9 +332,9 @@ class ChangeDinoDecoder(nn.Module):
         pred_p2 = self.p2_head(feats[0])
 
         # 3. 上采样到原始图像尺寸
-        ori_shape = batch_img_metas[0]['ori_shape']
+        img_shape = batch_img_metas[0]['ori_shape']
         pred_p2 = F.interpolate(
-            pred_p2, size=ori_shape, mode="bilinear",
+            pred_p2, size=img_shape, mode="bilinear",
             align_corners=self.align_corners
         )
 
@@ -351,3 +359,67 @@ class ChangeDinoDecoder(nn.Module):
         """
         feats = self.extract_feats(feats1, feats2)
         return self._get_predictions(feats)
+
+    def loss_with_preds(
+        self,
+        feats1: List[torch.Tensor],
+        feats2: List[torch.Tensor],
+        data_samples: List,
+        train_cfg: Optional[dict] = None,
+    ) -> Tuple[dict, Tuple[torch.Tensor, ...]]:
+        """计算训练损失并返回预测结果。
+        
+        与 loss 方法类似，但额外返回多尺度预测，供 refiner 使用。
+        
+        Returns:
+            (loss_dict, preds): 损失字典和多尺度预测 (pred_p2, pred_p3, pred_p4, pred_p5)
+        """
+        # 1. 提取差异特征
+        feats = self.extract_feats(feats1, feats2)
+
+        # 2. 各尺度预测
+        pred_p2, pred_p3, pred_p4, pred_p5 = self._get_predictions(feats)
+
+        # 3. 解析 GT
+        gt_label_tensor = self._parse_gt(data_samples)
+        target_size = gt_label_tensor.shape[-2:]
+
+        # 4. 上采样预测到 GT 尺寸
+        pred_p2 = F.interpolate(
+            pred_p2, size=target_size, mode="bilinear",
+            align_corners=self.align_corners)
+        pred_p3 = F.interpolate(
+            pred_p3, size=target_size, mode="bilinear",
+            align_corners=self.align_corners)
+        pred_p4 = F.interpolate(
+            pred_p4, size=target_size, mode="bilinear",
+            align_corners=self.align_corners)
+        pred_p5 = F.interpolate(
+            pred_p5, size=target_size, mode="bilinear",
+            align_corners=self.align_corners)
+
+        scale_preds = {
+            'p2': pred_p2,
+            'p3': pred_p3,
+            'p4': pred_p4,
+            'p5': pred_p5,
+        }
+        
+        total_focal = 0.0
+        total_dice = 0.0
+        
+        for name, pred in scale_preds.items():
+            focal_weight = self.aux_focal_weights.get(name, 0.0)
+            dice_weight = self.aux_dice_weights.get(name, 0.0)
+            
+            if focal_weight > 0:
+                total_focal += self.focal_loss(pred, gt_label_tensor) * focal_weight
+            if dice_weight > 0:
+                total_dice += self.dice_loss(pred, gt_label_tensor) * dice_weight
+        
+        losses = {}
+        losses['loss_focal'] = total_focal
+        losses['loss_dice'] = total_dice
+
+        # 返回损失和所有尺度预测
+        return losses, (pred_p2, pred_p3, pred_p4, pred_p5)

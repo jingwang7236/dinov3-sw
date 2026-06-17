@@ -66,7 +66,7 @@ class ChangeDinoEncoder(nn.Module):
         return: [B, 1, H, W]
         """
         fea = self.backbone.forward(x)
-        fea = self.fpn(fea[-4:])  # t1_p1, t1_p2, t1_p3, t1_p4
+        fea = self.fpn(fea[-4:])  # t1_p2, t1_p3, t1_p4, t1_p5
 
         ds_fea = self.dino(x)
 

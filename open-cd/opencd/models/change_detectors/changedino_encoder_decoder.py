@@ -74,6 +74,10 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
     def loss(self, inputs: Tensor, data_samples: List) -> dict:
         """计算训练损失。
 
+        参考原始 ChangeDINO 论文：
+        - 训练时 refiner 参与前向传播
+        - 损失基于 refiner 处理后的最终预测计算
+
         Args:
             inputs: 输入张量
             data_samples: 数据样本列表
@@ -82,7 +86,40 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
             损失字典
         """
         feats1, feats2 = self.extract_feat(inputs)
-        return self.decode_head.loss(feats1, feats2, data_samples)
+        # 1. 获取解码器的多尺度预测
+        # decode_head.loss 返回损失和预测结果
+        loss_dict, preds = self.decode_head.loss_with_preds(
+            feats1, feats2, data_samples
+        )
+        
+        # 2. 提取最高分辨率的预测 (pred_p2)
+        if isinstance(preds, (tuple, list)):
+            final_pred = preds[0]  # pred_p2
+        else:
+            final_pred = preds
+        # 3. 应用 Refiner（训练阶段也使用）
+        if self.refiner is not None:
+            final_pred = self.refiner(final_pred)
+            # 更新损失：使用 refiner 处理后的预测重新计算损失
+            loss_fn = self.decode_head.loss_fn if hasattr(self.decode_head, 'loss_fn') else None
+            if loss_fn is not None:
+                # 获取 ground truth
+                gt_label_tensor = self.decode_head._parse_gt(data_samples)
+                if gt_label_tensor.shape[-2:] != final_pred.shape[-2:]:
+                    final_pred = F.interpolate(
+                        final_pred,
+                        size=gt_label_tensor.shape[-2:],
+                        mode='bilinear',
+                        align_corners=self.decode_head.align_corners
+                    )
+                # 更新主损失为 refiner 处理后的损失
+                loss_dict['loss_ce'] = loss_fn(
+                    final_pred, 
+                    gt_label_tensor, 
+                    ignore_index=self.decode_head.ignore_index
+                )
+        
+        return loss_dict
 
     # ------------------------------------------------------------------
     # predict: 推理预测，委托给 decode_head.predict + refiner
@@ -140,10 +177,21 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
             多尺度预测 logits
         """
         feats1, feats2 = self.extract_feat(inputs)
-        return self.decode_head._forward(feats1, feats2)
+        # return self.decode_head._forward(feats1, feats2)
+        preds = self.decode_head._forward(feats1, feats2)
+        
+        # 提取最高分辨率预测
+        if isinstance(preds, (tuple, list)):
+            final_pred = preds[0]
+        else:
+            final_pred = preds
+        
+        # 应用 Refiner
+        if self.refiner is not None:
+            final_pred = self.refiner(final_pred)
+        
+        return final_pred
 
-    # ------------------------------------------------------------------
-    # postprocess_result: 后处理
     # ------------------------------------------------------------------
     def postprocess_result(
         self, seg_logits: Tensor, data_samples: List
@@ -163,6 +211,19 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
 
         for i in range(batch_size):
             i_seg_logits = seg_logits[i]
+            # 获取原始图像尺寸
+            ori_shape = data_samples[i].metainfo.get('ori_shape', (H, W))
+            
+            # 如果尺寸不匹配，上采样到原始尺寸
+            i_seg_logits = seg_logits[i]
+            if i_seg_logits.shape[-2:] != ori_shape:
+                i_seg_logits = F.interpolate(
+                    i_seg_logits.unsqueeze(0), 
+                    size=ori_shape, 
+                    mode='bilinear', 
+                    align_corners=self.align_corners
+                ).squeeze(0)
+                
             if C > 1:
                 i_seg_pred = i_seg_logits.argmax(dim=0, keepdim=True)
             else:
