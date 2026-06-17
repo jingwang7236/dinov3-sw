@@ -1,7 +1,7 @@
 _base_ = '../_base_/default_runtime.py'
 
-dataset_type = 'LEVIR_CD_Dataset'
-data_root = '/mnt/ht2-nas2/EO_test/dataset/ChangeDetection/LEVIR-CD'
+dataset_type = 'SYSU_CD_Dataset'
+data_root = '/mnt/ht2-nas2/EO_test/dataset/ChangeDetection/SYSU-CD'
 
 crop_size = (256, 256)
 train_pipeline = [
@@ -22,30 +22,13 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='MultiImgLoadImageFromFile'),
-    dict(type='MultiImgResize', scale=(1024, 1024), keep_ratio=True),
+    dict(type='MultiImgResize', scale=crop_size, keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='MultiImgLoadAnnotations'),
     dict(type='MultiImgPackSegInputs')
 ]
-img_ratios = [0.75, 1.0, 1.25]
-tta_pipeline = [
-    dict(type='MultiImgLoadImageFromFile', backend_args=None),
-    dict(
-        type='TestTimeAug',
-        transforms=[
-            [
-                dict(type='MultiImgResize', scale_factor=r, keep_ratio=True)
-                for r in img_ratios
-            ],
-            [
-                dict(type='MultiImgRandomFlip', prob=0., direction='horizontal'),
-                dict(type='MultiImgRandomFlip', prob=1., direction='horizontal')
-            ],
-            [dict(type='MultiImgLoadAnnotations')],
-            [dict(type='MultiImgPackSegInputs')]
-        ])
-]
+img_ratios = [0.5, 0.75, 1.0, 1.25, 1.5]
 train_dataloader = dict(
     batch_size=16,
     num_workers=4,
@@ -55,9 +38,9 @@ train_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            seg_map_path='train/GT',
-            img_path_from='train/T1', 
-            img_path_to='train/T2'),
+            seg_map_path='train/label',
+            img_path_from='train/time1', 
+            img_path_to='train/time2'),
         pipeline=train_pipeline))
 val_dataloader = dict(
     batch_size=1,
@@ -68,9 +51,9 @@ val_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            seg_map_path='val/GT',
-            img_path_from='val/T1',
-            img_path_to='val/T2'),
+            seg_map_path='val/label',
+            img_path_from='val/time1',
+            img_path_to='val/time2'),
         pipeline=test_pipeline))
 test_dataloader = dict(
     batch_size=1,
@@ -81,9 +64,9 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            seg_map_path='test/GT',
-            img_path_from='test/T1',
-            img_path_to='test/T2'),
+            seg_map_path='test/label',
+            img_path_from='test/time1',
+            img_path_to='test/time2'),
         pipeline=test_pipeline))
 
 val_evaluator = dict(type='mmseg.IoUMetric', iou_metrics=['mFscore', 'mIoU'])
@@ -120,4 +103,4 @@ default_hooks = dict(
                     save_best='mIoU'),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='CDVisualizationHook', interval=1, 
-                       img_shape=(1024, 1024, 3)))
+                       img_shape=(256, 256, 3)))
