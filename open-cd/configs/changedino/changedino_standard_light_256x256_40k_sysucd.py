@@ -6,8 +6,8 @@ crop_size = (256, 256)
 norm_cfg = dict(type='SyncBN', requires_grad=True)
 data_preprocessor = dict(
     type='DualInputSegDataPreProcessor',
-    mean=[123.675, 116.28, 103.53] * 2,
-    std=[58.395, 57.12, 57.375] * 2,
+    mean=[109.65, 104.805, 75.435] * 2,
+    std=[54.315, 39.78, 36.465] * 2,
     bgr_to_rgb=True,
     size_divisor=32,
     pad_val=0,
@@ -32,13 +32,8 @@ model = dict(
         n_layers=[1, 1, 1, 1],
         num_classes=2,
         align_corners=False,
-        loss_decode=dict(
-            type='mmseg.CrossEntropyLoss',
-            use_sigmoid=False,
-            loss_weight=1.0,
-            avg_non_ignore=True,
-            ignore_index=255  # 添加这行
-        ),
+        ignore_index=255,
+    ),
     # 可选：后处理模块
     refiner=dict(
         type='LearnableSoftMorph',
@@ -46,7 +41,6 @@ model = dict(
         k_close=5,
         tau=0.05,
         ),
-    ),
     # model training and testing settings
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
@@ -67,7 +61,7 @@ train_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=16,
+    batch_size=12,
     dataset=dict(pipeline=train_pipeline))
 
 test_pipeline = [
@@ -91,9 +85,29 @@ test_dataloader = dict(
     dataset=dict(pipeline=test_pipeline))
 
 optimizer=dict(
-    type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.05)
+    type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.0005)
 optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 
 # compile = True # use PyTorch 2.x
 
 train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=4000)
+
+param_scheduler = [
+    # 阶段1: 长预热 (3000 iterations)
+    dict(
+        type='LinearLR',
+        start_factor=1e-5,
+        by_epoch=False,
+        begin=0,
+        end=3000,
+    ),
+    # 阶段2: 余弦退火 (从最高学习率衰减到最低)
+    dict(
+        type='CosineAnnealingLR',
+        T_max=37000,  # 总迭代数 - 预热迭代数
+        eta_min=1e-6,
+        by_epoch=False,
+        begin=3000,
+        end=40000,
+    )
+]

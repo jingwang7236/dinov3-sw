@@ -34,7 +34,9 @@ class FocalLoss(nn.Module):
             pt = pred_prob.clamp(1e-8, 1 - 1e-8)
             focal_weight = (1 - pt) ** self.gamma
             if self.alpha is not None:
-                alpha_weight = torch.where(target_safe == 1, self.alpha, 1 - self.alpha)
+                # 与官方 [alpha, 1-alpha] gather(target) 对齐：
+                # 变化类(1)->0.75, 背景类(0)->0.25
+                alpha_weight = torch.where(target_safe == 1, 1 - self.alpha, self.alpha)
                 focal_weight = alpha_weight * focal_weight
             loss = -focal_weight * torch.log(pt)
         

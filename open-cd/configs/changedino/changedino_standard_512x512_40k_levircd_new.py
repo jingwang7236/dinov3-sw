@@ -8,8 +8,9 @@ crop_size = (512, 512)
 norm_cfg = dict(type='SyncBN', requires_grad=True)
 data_preprocessor = dict(
     type='DualInputSegDataPreProcessor',
-    mean=[123.675, 116.28, 103.53] * 2,
-    std=[58.395, 57.12, 57.375] * 2,
+    # 与官方 cd_dataset.py 对齐的遥感专用统计量 (0-1 空间 mean/std × 255)
+    mean=[109.65, 104.805, 75.435] * 2,
+    std=[54.315, 39.78, 36.465] * 2,
     bgr_to_rgb=True,
     size_divisor=32,
     pad_val=0,
@@ -85,7 +86,7 @@ test_dataloader = dict(
     dataset=dict(pipeline=test_pipeline))
 
 optimizer=dict(
-    type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.05)
+    type='AdamW', lr=0.0005, betas=(0.9, 0.999), weight_decay=0.0005)
 optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 
 # compile = True # use PyTorch 2.x
@@ -93,19 +94,21 @@ optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=2000)
 
 param_scheduler = [
+    # 阶段1: 长预热 (3000 iterations)
     dict(
         type='LinearLR',
-        start_factor=0.001,
+        start_factor=1e-5,
         by_epoch=False,
         begin=0,
-        end=1000,
+        end=3000,
     ),
+    # 阶段2: 余弦退火 (从最高学习率衰减到最低)
     dict(
-        type='PolyLR',
-        power=0.9,
-        begin=1000,
-        end=40000,
-        eta_min=0.0,
+        type='CosineAnnealingLR',
+        T_max=37000,  # 总迭代数 - 预热迭代数
+        eta_min=1e-6,
         by_epoch=False,
+        begin=3000,
+        end=40000,
     )
 ]

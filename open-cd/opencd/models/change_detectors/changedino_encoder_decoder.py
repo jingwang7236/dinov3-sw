@@ -74,9 +74,10 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
     def loss(self, inputs: Tensor, data_samples: List) -> dict:
         """计算训练损失。
 
-        参考原始 ChangeDINO 论文：
-        - 训练时 refiner 参与前向传播
-        - 损失基于 refiner 处理后的最终预测计算
+        与官方 ChangeDINO 对齐：
+        - refiner 输出 final_pred 单独以全权重参与 focal/dice，并正常反传训练 refiner
+        - 辅助分支 p2/p3/p4/p5 的 focal 权重为 1.0，dice 权重为 0.5
+        - 总损失 = 0.5 * focal + dice
 
         Args:
             inputs: 输入张量
@@ -86,39 +87,38 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
             损失字典
         """
         feats1, feats2 = self.extract_feat(inputs)
-        # 1. 获取解码器的多尺度预测
-        # decode_head.loss 返回损失和预测结果
+        # 1. 解码器多尺度预测 + 辅助损失
+        # loss_with_preds 内部已对 p2/p3/p4/p5 计算 focal(×1.0)+dice(×0.5)
         loss_dict, preds = self.decode_head.loss_with_preds(
             feats1, feats2, data_samples
         )
-        
-        # 2. 提取最高分辨率的预测 (pred_p2)
-        if isinstance(preds, (tuple, list)):
-            final_pred = preds[0]  # pred_p2
-        else:
-            final_pred = preds
-        # 3. 应用 Refiner（训练阶段也使用）
+
+        # 2. 解析 GT
+        gt_label_tensor = self.decode_head._parse_gt(data_samples)
+
+        # 3. 应用 Refiner 并以全权重计算损失（关键：使 refiner 参与训练）
         if self.refiner is not None:
+            final_pred = preds[0]  # pred_p2 (已上采样到 GT 尺寸)
             final_pred = self.refiner(final_pred)
-            # 更新损失：使用 refiner 处理后的预测重新计算损失
-            loss_fn = self.decode_head.loss_fn if hasattr(self.decode_head, 'loss_fn') else None
-            if loss_fn is not None:
-                # 获取 ground truth
-                gt_label_tensor = self.decode_head._parse_gt(data_samples)
-                if gt_label_tensor.shape[-2:] != final_pred.shape[-2:]:
-                    final_pred = F.interpolate(
-                        final_pred,
-                        size=gt_label_tensor.shape[-2:],
-                        mode='bilinear',
-                        align_corners=self.decode_head.align_corners
-                    )
-                # 更新主损失为 refiner 处理后的损失
-                loss_dict['loss_ce'] = loss_fn(
-                    final_pred, 
-                    gt_label_tensor, 
-                    ignore_index=self.decode_head.ignore_index
+            if final_pred.shape[-2:] != gt_label_tensor.shape[-2:]:
+                final_pred = F.interpolate(
+                    final_pred,
+                    size=gt_label_tensor.shape[-2:],
+                    mode='bilinear',
+                    align_corners=self.decode_head.align_corners
                 )
-        
+            ref_focal = self.decode_head.focal_loss(
+                final_pred, gt_label_tensor)
+            ref_dice = self.decode_head.dice_loss(
+                final_pred, gt_label_tensor)
+            # refiner 输出：focal/dice 均为全权重(1.0)
+            loss_dict['loss_focal'] = loss_dict['loss_focal'] + ref_focal
+            loss_dict['loss_dice'] = loss_dict['loss_dice'] + ref_dice
+
+        # 4. 官方总损失 = 0.5 * focal + dice
+        if 'loss_focal' in loss_dict:
+            loss_dict['loss_focal'] = loss_dict['loss_focal'] * 0.5
+
         return loss_dict
 
     # ------------------------------------------------------------------

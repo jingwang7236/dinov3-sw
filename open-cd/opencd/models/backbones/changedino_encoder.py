@@ -85,11 +85,18 @@ class ChangeDinoEncoderOnlyDino(nn.Module):
         dino_weight="/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth",
         device="cuda",
         extract_ids=[5, 11, 17, 23],
+        freeze_mode="frozen",
+        unfreeze_layers=2,
         **kwargs,
     ):
         super().__init__()
+        # 显式透传 freeze_mode / unfreeze_layers，保证配置中的训练策略真正生效
         self.dino = DINOV3Wrapper(
-            weights_path=dino_weight, device=device, extract_ids=extract_ids
+            weights_path=dino_weight,
+            device=device,
+            extract_ids=extract_ids,
+            freeze_mode=freeze_mode,
+            unfreeze_layers=unfreeze_layers,
         )
         self.dense_adp = DenseAdapterLite(
             in_dim=1024, out_dim=out_channels, bottleneck=out_channels // 2

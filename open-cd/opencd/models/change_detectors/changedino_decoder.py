@@ -70,10 +70,10 @@ class ChangeDinoDecoder(nn.Module):
         self.num_classes = num_classes
         self.out_channels = num_classes
         self.ignore_index = ignore_index
-        # Focal Loss
+        # Focal Loss (与官方一致: gamma=4.0)
         self.focal_loss = FocalLoss(
             alpha=0.25,
-            gamma=2.0,
+            gamma=4.0,
             ignore_index=ignore_index
         )
         # Dice Loss
@@ -88,7 +88,7 @@ class ChangeDinoDecoder(nn.Module):
             'p5': 1.0,
         }
         self.aux_dice_weights = {
-            'p2': 1.0,
+            'p2': 0.5,
             'p3': 0.5,
             'p4': 0.5,
             'p5': 0.5,

@@ -5,6 +5,7 @@ from typing import List
 import re
 import os
 import sys
+import contextlib
 sys.path.insert(0, "/mnt/ht2-nas2/00-model/00-wj/Codes/dinov3-sw/open-cd")
 
 
@@ -124,20 +125,26 @@ class DINOV3Wrapper(nn.Module):
         x = F.interpolate(
             x, size=(512, 512), mode="bilinear", align_corners=True, antialias=True
         )
-        with torch.no_grad():
-            with torch.autocast(device_type=self.device, dtype=torch.float32):
-                feats = self.model.get_intermediate_layers(
-                    x, n=range(self.n_layers), reshape=True, norm=True
-                )
-                feats_ = []
-                for i in range(len(self.extract_ids)):
-                    feats_.append(
-                        F.interpolate(
-                            feats[self.extract_ids[i]],
-                            scale_factor=scale_factor,
-                            mode="bilinear",
-                        )
+        # 关键：冻结时用 no_grad 省显存；微调时必须放开梯度，否则
+        # 即使 requires_grad=True，梯度也会在此被截断，DINOv3 无法被更新。
+        if self.freeze_mode == "frozen":
+            grad_ctx = torch.no_grad()
+        else:
+            grad_ctx = contextlib.nullcontext()
+
+        with grad_ctx:
+            feats = self.model.get_intermediate_layers(
+                x, n=range(self.n_layers), reshape=True, norm=True
+            )
+            feats_ = []
+            for i in range(len(self.extract_ids)):
+                feats_.append(
+                    F.interpolate(
+                        feats[self.extract_ids[i]],
+                        scale_factor=scale_factor,
+                        mode="bilinear",
                     )
+                )
         return feats_
 
 class SepAdapterBlock(nn.Module):
