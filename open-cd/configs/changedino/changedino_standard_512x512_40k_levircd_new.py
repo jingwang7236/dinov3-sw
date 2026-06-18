@@ -47,10 +47,10 @@ model = dict(
 train_pipeline = [
     dict(type='MultiImgLoadImageFromFile'),
     dict(type='MultiImgLoadAnnotations'),
-    dict(type='MultiImgRandomRotate', prob=0.5, degree=180),
+    dict(type='MultiImgRandomRotate', prob=0.5, degree=20),
     dict(type='MultiImgRandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
     dict(type='MultiImgRandomFlip', prob=0.5, direction='horizontal'),
-    dict(type='MultiImgRandomFlip', prob=0.5, direction='vertical'),
+    # dict(type='MultiImgRandomFlip', prob=0.5, direction='vertical'),
     dict(type='MultiImgExchangeTime', prob=0.5),
     dict(
         type='MultiImgPhotoMetricDistortion',
@@ -85,9 +85,27 @@ test_dataloader = dict(
     dataset=dict(pipeline=test_pipeline))
 
 optimizer=dict(
-    type='AdamW', lr=0.001, betas=(0.9, 0.999), weight_decay=0.05)
+    type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.05)
 optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 
 # compile = True # use PyTorch 2.x
 
-train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=4000)
+train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=2000)
+
+param_scheduler = [
+    dict(
+        type='LinearLR',
+        start_factor=0.001,
+        by_epoch=False,
+        begin=0,
+        end=1000,
+    ),
+    dict(
+        type='PolyLR',
+        power=0.9,
+        begin=1000,
+        end=40000,
+        eta_min=0.0,
+        by_epoch=False,
+    )
+]

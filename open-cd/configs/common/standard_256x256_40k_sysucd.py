@@ -38,9 +38,9 @@ train_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            seg_map_path='train/label',
-            img_path_from='train/time1', 
-            img_path_to='train/time2'),
+            seg_map_path='train/GT',
+            img_path_from='train/T1', 
+            img_path_to='train/T2'),
         pipeline=train_pipeline))
 val_dataloader = dict(
     batch_size=1,
@@ -64,9 +64,9 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            seg_map_path='test/label',
-            img_path_from='test/time1',
-            img_path_to='test/time2'),
+            seg_map_path='test/GT',
+            img_path_from='test/T1',
+            img_path_to='test/T2'),
         pipeline=test_pipeline))
 
 val_evaluator = dict(type='mmseg.IoUMetric', iou_metrics=['mFscore', 'mIoU'])

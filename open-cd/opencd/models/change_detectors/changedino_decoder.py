@@ -83,15 +83,15 @@ class ChangeDinoDecoder(nn.Module):
         # 各尺度损失权重
         self.aux_focal_weights = {
             'p2': 1.0,
-            'p3': 0.5,
-            'p4': 0.3,
-            'p5': 0.2,
+            'p3': 1.0,
+            'p4': 1.0,
+            'p5': 1.0,
         }
         self.aux_dice_weights = {
             'p2': 1.0,
             'p3': 0.5,
-            'p4': 0.3,
-            'p5': 0.2,
+            'p4': 0.5,
+            'p5': 0.5,
         }
         # ========== 模型参数 ==========
         self.fpn_channels = fpn_channels

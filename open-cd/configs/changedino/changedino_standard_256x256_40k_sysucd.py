@@ -1,7 +1,7 @@
 _base_ = [
     '../common/standard_256x256_40k_sysucd.py']
 
-crop_size = (256, 256)
+crop_size = (512, 512)
 # model settings
 norm_cfg = dict(type='SyncBN', requires_grad=True)
 data_preprocessor = dict(
@@ -17,14 +17,11 @@ model = dict(
     type='ChangeDinoEncoderDecoder',  # ChangeDino网络结构,同论文
     data_preprocessor=data_preprocessor,
     backbone=dict(
-        type='ChangeDinoEncoderOnlyDino',
-        out_channels=128,
+        type='ChangeDinoEncoder',
+        backbone="mobilenetv2",
+        fpn_channels=128,
         extract_ids=[5, 11, 17, 23],
         dino_weight='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
-        # freeze_mode="frozen",  # default: frozen
-        freeze_mode="full_finetune",
-        # freeze_mode="unfreeze_last_n",
-        # unfreeze_layers=4,  # 解冻最后 4 层
     ),
     decode_head=dict(
         type='ChangeDinoDecoder',
@@ -32,20 +29,14 @@ model = dict(
         n_layers=[1, 1, 1, 1],
         num_classes=2,
         align_corners=False,
-        loss_decode=dict(
-            type='mmseg.CrossEntropyLoss',
-            use_sigmoid=False,
-            loss_weight=1.0,
-            avg_non_ignore=True,
-            ignore_index=255  # 添加这行
-        ),
+        ignore_index=255,
+    ),
     # 可选：后处理模块
     refiner=dict(
         type='LearnableSoftMorph',
         k_open=3,
         k_close=5,
         tau=0.05,
-        ),
     ),
     # model training and testing settings
     train_cfg=dict(),
@@ -54,8 +45,10 @@ model = dict(
 train_pipeline = [
     dict(type='MultiImgLoadImageFromFile'),
     dict(type='MultiImgLoadAnnotations'),
-    dict(type='MultiImgRandomRotFlip', rotate_prob=0.5, flip_prob=0.5, degree=(-20, 20)),
+    dict(type='MultiImgRandomRotate', prob=0.5, degree=20),
     dict(type='MultiImgRandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
+    dict(type='MultiImgRandomFlip', prob=0.5, direction='horizontal'),
+    # dict(type='MultiImgRandomFlip', prob=0.5, direction='vertical'),
     dict(type='MultiImgExchangeTime', prob=0.5),
     dict(
         type='MultiImgPhotoMetricDistortion',
@@ -65,9 +58,8 @@ train_pipeline = [
         hue_delta=10),
     dict(type='MultiImgPackSegInputs')
 ]
-
 train_dataloader = dict(
-    batch_size=16,
+    batch_size=12,
     dataset=dict(pipeline=train_pipeline))
 
 test_pipeline = [
@@ -96,4 +88,22 @@ optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 
 # compile = True # use PyTorch 2.x
 
-train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=4000)
+train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=2000)
+
+param_scheduler = [
+    dict(
+        type='LinearLR',
+        start_factor=0.001,
+        by_epoch=False,
+        begin=0,
+        end=1000,
+    ),
+    dict(
+        type='PolyLR',
+        power=0.9,
+        begin=1000,
+        end=40000,
+        eta_min=0.0,
+        by_epoch=False,
+    )
+]
