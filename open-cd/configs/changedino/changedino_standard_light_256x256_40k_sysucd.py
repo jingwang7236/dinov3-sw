@@ -21,8 +21,8 @@ model = dict(
         out_channels=128,
         extract_ids=[5, 11, 17, 23],
         dino_weight='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
-        # freeze_mode="frozen",  # default: frozen
-        freeze_mode="full_finetune",
+        freeze_mode="frozen",  # default: frozen
+        # freeze_mode="full_finetune",
         # freeze_mode="unfreeze_last_n",
         # unfreeze_layers=4,  # 解冻最后 4 层
     ),
@@ -34,58 +34,34 @@ model = dict(
         align_corners=False,
         ignore_index=255,
     ),
-    # 可选：后处理模块
     refiner=dict(
         type='LearnableSoftMorph',
         k_open=3,
         k_close=5,
         tau=0.05,
-        ),
-    # model training and testing settings
+    ),
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
 
-train_pipeline = [
-    dict(type='MultiImgLoadImageFromFile'),
-    dict(type='MultiImgLoadAnnotations'),
-    dict(type='MultiImgRandomRotFlip', rotate_prob=0.5, flip_prob=0.5, degree=(-20, 20)),
-    dict(type='MultiImgRandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
-    dict(type='MultiImgExchangeTime', prob=0.5),
-    dict(
-        type='MultiImgPhotoMetricDistortion',
-        brightness_delta=10,
-        contrast_range=(0.8, 1.2),
-        saturation_range=(0.8, 1.2),
-        hue_delta=10),
-    dict(type='MultiImgPackSegInputs')
-]
 
 train_dataloader = dict(
-    batch_size=8,
-    dataset=dict(pipeline=train_pipeline))
-
-test_pipeline = [
-    dict(type='MultiImgLoadImageFromFile'),
-    dict(type='MultiImgResize', scale=crop_size, keep_ratio=True),
-    dict(type='MultiImgLoadAnnotations'),
-    dict(type='MultiImgPackSegInputs')
-]
-
+    batch_size=64,
+)
 val_dataloader = dict(
     batch_size=1,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
-    dataset=dict(pipeline=test_pipeline))
+)
 test_dataloader = dict(
     batch_size=1,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
-    dataset=dict(pipeline=test_pipeline))
+)
 
 optimizer=dict(
-    type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.0005)
+    type='AdamW', lr=0.0005, betas=(0.9, 0.999), weight_decay=0.0005)
 optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 
 # compile = True # use PyTorch 2.x

@@ -1,7 +1,7 @@
 _base_ = '../_base_/default_runtime.py'
 
 dataset_type = 'LEVIR_CD_Dataset'
-data_root = '/mnt/ht2-nas2/EO_test/dataset/ChangeDetection/LEVIR-CD'
+data_root = '/mnt/ht2-nas2/EO_test/dataset/ChangeDetection/LEVIR-CD-Patch'
 
 crop_size = (256, 256)
 train_pipeline = [

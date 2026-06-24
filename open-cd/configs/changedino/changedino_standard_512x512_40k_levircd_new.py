@@ -8,7 +8,6 @@ crop_size = (512, 512)
 norm_cfg = dict(type='SyncBN', requires_grad=True)
 data_preprocessor = dict(
     type='DualInputSegDataPreProcessor',
-    # 与官方 cd_dataset.py 对齐的遥感专用统计量 (0-1 空间 mean/std × 255)
     mean=[109.65, 104.805, 75.435] * 2,
     std=[54.315, 39.78, 36.465] * 2,
     bgr_to_rgb=True,

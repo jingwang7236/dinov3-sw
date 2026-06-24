@@ -53,40 +53,41 @@ class FocalLoss(nn.Module):
 
 
 class DICELoss(nn.Module):
-    def __init__(self, smooth=1e-5, reduction='mean', ignore_index=255):
+    def __init__(self, smooth=1e-8, reduction='mean', ignore_index=255):
         super().__init__()
         self.smooth = smooth
         self.reduction = reduction
         self.ignore_index = ignore_index
 
     def forward(self, pred, target):
-        """计算 Dice Loss."""
-        # 1. 创建有效像素掩码
+        """计算 Dice Loss（对齐 kornia.losses.dice_loss 的 micro 模式）。
+
+        Args:
+            pred: [N, C, H, W] logits
+            target: [N, H, W] long
+        """
+        # 1. 有效像素掩码
         valid_mask = target != self.ignore_index
-        
-        # 2. 将 target 中的 ignore_index 临时替换为 0
         target_safe = target.clone()
         target_safe[~valid_mask] = 0
-        
-        # 3. 对于二分类
-        if pred.shape[1] == 1:
-            pred_sigmoid = torch.sigmoid(pred)
-            pred_prob = pred_sigmoid
-            target_float = target_safe.float()
-        else:
-            pred_softmax = F.softmax(pred, dim=1)
-            target_one_hot = F.one_hot(target_safe, num_classes=pred.shape[1]).permute(0, 3, 1, 2).float()
-            pred_prob = (pred_softmax * target_one_hot).sum(dim=1)
-            target_float = target_one_hot[:, 1] if pred.shape[1] > 1 else target_safe.float()
-        
-        # 4. 计算 Dice
-        intersection = (pred_prob * target_float).sum(dim=(1, 2))
-        union = pred_prob.sum(dim=(1, 2)) + target_float.sum(dim=(1, 2))
-        dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
-        
-        # 5. 只对有效像素计算
-        dice = dice * valid_mask.float().mean(dim=(1, 2))
-        
+
+        C = pred.shape[1]
+        pred_softmax = F.softmax(pred, dim=1)  # [N, C, H, W]
+        target_one_hot = F.one_hot(target_safe, num_classes=C)  # [N, H, W, C]
+        target_one_hot = target_one_hot.permute(0, 3, 1, 2).float()  # [N, C, H, W]
+
+        # 2. 将无效像素在 pred 和 target 中都置零，使其不参与求和
+        valid_expanded = valid_mask.unsqueeze(1).float()  # [N, 1, H, W]
+        pred_softmax = pred_softmax * valid_expanded
+        target_one_hot = target_one_hot * valid_expanded
+
+        # 3. micro dice: 在 (C, H, W) 维度上求和
+        dims = (1, 2, 3)
+        intersection = (pred_softmax * target_one_hot).sum(dim=dims)  # [N]
+        cardinality = (pred_softmax + target_one_hot).sum(dim=dims)   # [N]
+
+        dice = (2.0 * intersection + self.smooth) / (cardinality + self.smooth)
+
         if self.reduction == 'mean':
             return 1 - dice.mean()
         elif self.reduction == 'sum':

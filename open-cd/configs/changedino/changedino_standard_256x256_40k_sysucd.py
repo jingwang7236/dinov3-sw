@@ -6,7 +6,6 @@ crop_size = (256, 256)
 norm_cfg = dict(type='SyncBN', requires_grad=True)
 data_preprocessor = dict(
     type='DualInputSegDataPreProcessor',
-    # 与官方 cd_dataset.py 对齐的遥感专用统计量 (0-1 空间 mean/std × 255)
     mean=[109.65, 104.805, 75.435] * 2,
     std=[54.315, 39.78, 36.465] * 2,
     bgr_to_rgb=True,
@@ -43,45 +42,22 @@ model = dict(
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
 
-train_pipeline = [
-    dict(type='MultiImgLoadImageFromFile'),
-    dict(type='MultiImgLoadAnnotations'),
-    dict(type='MultiImgRandomRotate', prob=0.5, degree=20),
-    dict(type='MultiImgRandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
-    dict(type='MultiImgRandomFlip', prob=0.5, direction='horizontal'),
-    # dict(type='MultiImgRandomFlip', prob=0.5, direction='vertical'),
-    dict(type='MultiImgExchangeTime', prob=0.5),
-    dict(
-        type='MultiImgPhotoMetricDistortion',
-        brightness_delta=10,
-        contrast_range=(0.8, 1.2),
-        saturation_range=(0.8, 1.2),
-        hue_delta=10),
-    dict(type='MultiImgPackSegInputs')
-]
+
 train_dataloader = dict(
     batch_size=12,
-    dataset=dict(pipeline=train_pipeline))
-
-test_pipeline = [
-    dict(type='MultiImgLoadImageFromFile'),
-    dict(type='MultiImgResize', scale=crop_size, keep_ratio=True),
-    dict(type='MultiImgLoadAnnotations'),
-    dict(type='MultiImgPackSegInputs')
-]
-
+)
 val_dataloader = dict(
     batch_size=1,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
-    dataset=dict(pipeline=test_pipeline))
+)
 test_dataloader = dict(
     batch_size=1,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
-    dataset=dict(pipeline=test_pipeline))
+)
 
 optimizer=dict(
     type='AdamW', lr=0.0005, betas=(0.9, 0.999), weight_decay=0.0005)
@@ -89,7 +65,7 @@ optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 
 # compile = True # use PyTorch 2.x
 
-train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=2000)
+train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=4000)
 
 param_scheduler = [
     # 阶段1: 长预热 (3000 iterations)
