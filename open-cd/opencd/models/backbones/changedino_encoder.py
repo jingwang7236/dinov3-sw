@@ -106,3 +106,58 @@ class ChangeDinoEncoderOnlyDino(nn.Module):
         ds_fea = self.dino(x)
         ds_fea = self.dense_adp(ds_fea)
         return ds_fea
+
+
+# ================================================================
+# LoRA 插件式 Encoder — 继承 ChangeDinoEncoderOnlyDino，不修改原有类
+# 配置中将 type 改为 'ChangeDinoEncoderLoRA' 即可启用 LoRA
+# ================================================================
+from opencd.models.blocks.adapter import apply_lora
+
+
+@MODELS.register_module()
+class ChangeDinoEncoderLoRA(ChangeDinoEncoderOnlyDino):
+    """ChangeDino Encoder + LoRA 插件。
+
+    继承 ChangeDinoEncoderOnlyDino 的全部行为，在初始化后自动注入 LoRA：
+    1. 父类 __init__ 以 frozen 模式加载 DINOv3 权重并冻结
+    2. 将 freeze_mode 改为非 frozen（使 forward 不再使用 no_grad，梯度可流经 LoRA）
+    3. 注入 LoRA 适配器（原始权重保持冻结，仅 lora_A/lora_B 可训练）
+
+    Config 示例::
+
+        backbone=dict(
+            type='ChangeDinoEncoderLoRA',
+            out_channels=128,
+            extract_ids=[5, 11, 17, 23],
+            dino_weight='...',
+            lora_r=8,
+            lora_alpha=16,
+            lora_target_modules=["qkv", "proj", "fc1", "fc2"],
+        )
+    """
+
+    def __init__(
+        self,
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        lora_dropout: float = 0.0,
+        lora_target_modules: list = None,
+        **kwargs,
+    ):
+        # 父类以 frozen 模式初始化（加载权重 + 冻结全部参数）
+        kwargs.setdefault("freeze_mode", "frozen")
+        super().__init__(**kwargs)
+
+        # 关键：将 freeze_mode 设为非 frozen，使 DINOV3Wrapper.forward
+        # 使用 nullcontext() 而非 no_grad()，梯度才能流经冻结层到达 LoRA
+        self.dino.freeze_mode = "lora"
+
+        # 注入 LoRA 适配器（原始权重保持 requires_grad=False）
+        apply_lora(
+            self.dino.model,
+            r=lora_r,
+            alpha=lora_alpha,
+            target_modules=lora_target_modules,
+            dropout=lora_dropout,
+        )

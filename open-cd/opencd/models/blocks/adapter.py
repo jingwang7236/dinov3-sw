@@ -39,12 +39,10 @@ class DINOV3Wrapper(nn.Module):
     def __init__(
         self,
         weights_path="/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth",
-        # 自动下载权重的地址：/home/users_model/.cache/torch/hub/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth
-        # TODO: 暂时无法关闭自动下载，后续尝试使用本地下载的权重
         extract_ids=[5, 11, 17, 23],
         device="cuda",
         freeze_mode: str = "frozen",  # 'frozen', 'unfreeze_last_n', 'full_finetune'
-        unfreeze_layers: int = 2
+        unfreeze_layers: int = 2,
     ):
         super().__init__()
         self.device = device
@@ -72,20 +70,20 @@ class DINOV3Wrapper(nn.Module):
 
     def _apply_freeze_strategy(self):
         """根据 freeze_mode 应用不同的权重训练策略"""
-        
+
         if self.freeze_mode == "frozen":
             # 完全冻结
             self._freeze_all()
-            
+
         elif self.freeze_mode == "full_finetune":
             # 全量微调
             self._unfreeze_all()
-            
+
         elif self.freeze_mode == "unfreeze_last_n":
             # 解冻最后 N 层
             self._freeze_all()
             self._unfreeze_last_n_layers(self.unfreeze_layers)
-            
+
         else:
             raise ValueError(
                 f"Unsupported freeze_mode: {self.freeze_mode}. "
@@ -207,3 +205,103 @@ class DenseAdapterLite(nn.Module):
             block = self.blocks[0] if self.share else self.blocks[i]
             outs.append(block(x))
         return outs
+
+
+# ================================================================
+# LoRA Plugin — 独立模块，不修改上方任何已有类
+# 用法: apply_lora(vit_model, r=8, alpha=16)
+# ================================================================
+import math as _math
+
+
+class LoRALinear(nn.Module):
+    """LoRA 低秩适配器，包裹已有 nn.Linear。
+
+    前向: y = W_base(x) + (alpha/r) * B(A(x))
+    初始时 B=0 → 输出与原模型完全一致，训练中逐步学习增量。
+
+    Args:
+        base_linear: 原始 Linear 层（注入后自动冻结）
+        r: LoRA 秩
+        alpha: 缩放系数
+        dropout: LoRA 路径 dropout
+    """
+
+    def __init__(self, base_linear, r=8, alpha=16, dropout=0.0):
+        super().__init__()
+        self.base = base_linear
+        self.scale = alpha / r
+
+        in_f, out_f = base_linear.in_features, base_linear.out_features
+        self.lora_A = nn.Linear(in_f, r, bias=False)
+        self.lora_B = nn.Linear(r, out_f, bias=False)
+        nn.init.kaiming_uniform_(self.lora_A.weight, a=_math.sqrt(5))
+        nn.init.zeros_(self.lora_B.weight)
+        self.lora_drop = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+        for p in self.base.parameters():
+            p.requires_grad = False
+
+    # ---- 属性代理：让 LoRALinear 透明暴露原始 Linear 的常用属性 ----
+    @property
+    def in_features(self):
+        return self.base.in_features
+
+    @property
+    def out_features(self):
+        return self.base.out_features
+
+    @property
+    def weight(self):
+        return self.base.weight
+
+    @property
+    def bias(self):
+        return self.base.bias
+
+    def forward(self, x):
+        return self.base(x) + self.lora_B(self.lora_A(self.lora_drop(x))) * self.scale
+
+
+def apply_lora(model, r=8, alpha=16, target_modules=None,
+               dropout=0.0, verbose=True):
+    """向 ViT 模型的每个 Transformer Block 注入 LoRA 适配器。
+
+    注入后所有原始参数冻结，仅 lora_A / lora_B 可训练。
+
+    Args:
+        model: ViT 模型（需有 .blocks 属性，每个 block 含 .attn 和 .mlp）
+        r: LoRA 秩 (推荐 4/8/16)
+        alpha: 缩放系数 (推荐 = 2*r)
+        target_modules: 注入目标，默认 ["qkv", "proj", "fc1", "fc2"]
+        dropout: LoRA dropout
+        verbose: 打印注入统计
+    Returns:
+        model (原地修改)
+    """
+    if target_modules is None:
+        target_modules = ["qkv", "proj", "fc1", "fc2"]
+
+    n = 0
+    for block in model.blocks:
+        attn = block.attn
+        for name in ("qkv", "proj"):
+            if name in target_modules and hasattr(attn, name):
+                setattr(attn, name, LoRALinear(getattr(attn, name), r, alpha, dropout))
+                n += 1
+        mlp = block.mlp
+        for name in ("fc1", "fc2"):
+            if name in target_modules and hasattr(mlp, name):
+                setattr(mlp, name, LoRALinear(getattr(mlp, name), r, alpha, dropout))
+                n += 1
+
+    for pname, p in model.named_parameters():
+        if "lora_" not in pname:
+            p.requires_grad = False
+
+    if verbose:
+        tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        tot = sum(p.numel() for p in model.parameters())
+        print(f"[LoRA] {n} adapters / {len(model.blocks)} blocks | "
+              f"trainable {tr:,} / {tot:,} ({100*tr/tot:.2f}%)")
+    return model

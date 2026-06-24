@@ -12,7 +12,7 @@ from .vit_sam import ViTSAM_Custom
 from .lightcdnet import LightCDNet
 from .cgnet import CGNet
 from .dinov3 import DinoV3Backbone, SiameseDinoV3Backbone
-from .changedino_encoder import ChangeDinoEncoder, ChangeDinoEncoderOnlyDino
+from .changedino_encoder import ChangeDinoEncoder, ChangeDinoEncoderOnlyDino, ChangeDinoEncoderLoRA
 
 __all__ = ['IA_ResNetV1c', 'IA_ResNeSt', 'FC_EF', 'FC_Siam_diff', 
            'FC_Siam_conc', 'SNUNet_ECAM', 'TinyCD', 'IFN',
@@ -20,5 +20,6 @@ __all__ = ['IA_ResNetV1c', 'IA_ResNeSt', 'FC_EF', 'FC_Siam_diff',
            'VisionTransformerTurner', 'ViTSAM_Custom',
            'LightCDNet', 'CGNet', 
            'DinoV3Backbone', 'SiameseDinoV3Backbone',
-           'ChangeDinoEncoder', 'ChangeDinoEncoderOnlyDino'
+           'ChangeDinoEncoder', 'ChangeDinoEncoderOnlyDino',
+           'ChangeDinoEncoderLoRA'
            ]
