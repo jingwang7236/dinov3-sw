@@ -13,6 +13,7 @@ from .lightcdnet import LightCDNet
 from .cgnet import CGNet
 from .dinov3 import DinoV3Backbone, SiameseDinoV3Backbone
 from .changedino_encoder import ChangeDinoEncoder, ChangeDinoEncoderOnlyDino, ChangeDinoEncoderLoRA
+from .dinov3_adapter import DINOv3AdapterBackbone
 
 __all__ = ['IA_ResNetV1c', 'IA_ResNeSt', 'FC_EF', 'FC_Siam_diff', 
            'FC_Siam_conc', 'SNUNet_ECAM', 'TinyCD', 'IFN',
@@ -21,5 +22,6 @@ __all__ = ['IA_ResNetV1c', 'IA_ResNeSt', 'FC_EF', 'FC_Siam_diff',
            'LightCDNet', 'CGNet', 
            'DinoV3Backbone', 'SiameseDinoV3Backbone',
            'ChangeDinoEncoder', 'ChangeDinoEncoderOnlyDino',
-           'ChangeDinoEncoderLoRA'
+           'ChangeDinoEncoderLoRA',
+           'DINOv3AdapterBackbone'
            ]
