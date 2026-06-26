@@ -1,8 +1,9 @@
-# 在changedino_standard_512x512_40k_levircd.py基础上，只保留backbone中的dino模型，并开发后两层迭代的功能
+# changedino_standard_512x512_40k_levircd.py比论文指标低10个点左右，需要优化配置和代码
 _base_ = [
+    # '../_base_/models/changer_s50.py', 
     '../common/standard_512x512_40k_levircd.py']
 
-crop_size = (512, 512)
+crop_size = (256, 256)
 # model settings
 norm_cfg = dict(type='SyncBN', requires_grad=True)
 data_preprocessor = dict(
@@ -22,10 +23,7 @@ model = dict(
         out_channels=128,
         extract_ids=[5, 11, 17, 23],
         dino_weight='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
-        freeze_mode="frozen",  # 兼容参数；DINOv3_Adapter 始终冻结 ViT 主干
-        # freeze_mode="full_finetune",
-        # freeze_mode="unfreeze_last_n",
-        # unfreeze_layers=4,  # 解冻最后 4 层
+        freeze_mode="frozen",
     ),
     decode_head=dict(
         type='ChangeDinoDecoder',
@@ -63,7 +61,7 @@ train_pipeline = [
     dict(type='MultiImgPackSegInputs')
 ]
 train_dataloader = dict(
-    batch_size=32,
+    batch_size=48,
     dataset=dict(pipeline=train_pipeline))
 
 test_pipeline = [
@@ -92,7 +90,7 @@ optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
 
 # compile = True # use PyTorch 2.x
 
-train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=2000)
+train_cfg = dict(type='IterBasedTrainLoop', max_iters=40000, val_interval=4000)
 
 param_scheduler = [
     # 阶段1: 长预热 (3000 iterations)
