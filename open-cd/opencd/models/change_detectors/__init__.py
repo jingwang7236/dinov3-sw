@@ -10,10 +10,12 @@ from .mtkd import (DistillSiamEncoderDecoder,
                    DistillTimeTravellingPixels)
 from .changedino_decoder import ChangeDinoDecoder, ChangeDinoCrossAttnDecoder
 from .changedino_encoder_decoder import ChangeDinoEncoderDecoder
+from .dual_mode_encoder_decoder import DualModeBranchEncoderDecoder
 
 __all__ = ['SiamEncoderDecoder', 'DIEncoderDecoder', 'SiamEncoderMultiDecoder',
            'BAN', 'TimeTravellingPixels', 'DistillSiamEncoderDecoder', 
            'DistillSiamEncoderDecoder_ChangeStar', 'DistillDIEncoderDecoder',
            'DistillBAN', 'DistillTimeTravellingPixels',
            'ChangeDinoDecoder', 'ChangeDinoCrossAttnDecoder',
-           'ChangeDinoEncoderDecoder']
+           'ChangeDinoEncoderDecoder',
+           'DualModeBranchEncoderDecoder']

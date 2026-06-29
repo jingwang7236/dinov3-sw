@@ -15,4 +15,6 @@
 # work_dirs/changedino_base_512x512_40k_levircd/iter_4000.pth
 
 
-CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/changedino/changedino_standard_512x512_40k_levircd_new.py
+# CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/changedino/changedino_standard_512x512_40k_levircd_new.py
+
+OPENCV_LOG_LEVEL=ERROR CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/changedino/dualmode_dinov3sarcnn_256x256_40k_dfc2025bright.py

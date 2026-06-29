@@ -114,6 +114,17 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
             # refiner 输出：focal/dice 均为全权重(1.0)
             loss_dict['loss_focal'] = loss_dict['loss_focal'] + ref_focal
             loss_dict['loss_dice'] = loss_dict['loss_dice'] + ref_dice
+            # Lovász (可选)
+            if self.decode_head.lovasz_loss is not None:
+                ref_lovasz = self.decode_head.lovasz_loss(
+                    final_pred, gt_label_tensor)
+                if 'loss_lovasz' in loss_dict:
+                    loss_dict['loss_lovasz'] = (
+                        loss_dict['loss_lovasz']
+                        + ref_lovasz * self.decode_head.lovasz_weight)
+                else:
+                    loss_dict['loss_lovasz'] = (
+                        ref_lovasz * self.decode_head.lovasz_weight)
 
         # 4. 官方总损失 = 0.5 * focal + dice
         if 'loss_focal' in loss_dict:

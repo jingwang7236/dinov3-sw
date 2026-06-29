@@ -6,7 +6,7 @@ from typing import List, Tuple, Optional, Union
 from opencd.models.blocks import TransformerBlock
 from opencd.registry import MODELS
 
-from opencd.models.losses import DICELoss, FocalLoss
+from opencd.models.losses import DICELoss, FocalLoss, LovaszSoftmaxLoss
 
 class FuseGated(nn.Module):
     """Gated fusion module for multi-scale features."""
@@ -61,6 +61,7 @@ class ChangeDinoDecoder(nn.Module):
         align_corners: bool = False,
         aux_loss_weights: dict = None,
         ignore_index: int = 255,
+        lovasz_weight: float = 0.0,
         **kwargs,
     ):
         super().__init__()
@@ -80,6 +81,12 @@ class ChangeDinoDecoder(nn.Module):
         self.dice_loss = DICELoss(
             ignore_index=ignore_index
         )
+        # Lovász Loss (可选, 默认关闭以保持向后兼容)
+        self.lovasz_weight = lovasz_weight
+        if lovasz_weight > 0:
+            self.lovasz_loss = LovaszSoftmaxLoss(ignore_index=ignore_index)
+        else:
+            self.lovasz_loss = None
         # 各尺度损失权重
         self.aux_focal_weights = {
             'p2': 1.0,
@@ -92,6 +99,12 @@ class ChangeDinoDecoder(nn.Module):
             'p3': 0.5,
             'p4': 0.5,
             'p5': 0.5,
+        }
+        self.aux_lovasz_weights = {
+            'p2': 1.0,
+            'p3': 0.5,
+            'p4': 0.3,
+            'p5': 0.1,
         }
         # ========== 模型参数 ==========
         self.fpn_channels = fpn_channels
@@ -420,6 +433,15 @@ class ChangeDinoDecoder(nn.Module):
         losses = {}
         losses['loss_focal'] = total_focal
         losses['loss_dice'] = total_dice
+
+        # Lovász loss (可选)
+        if self.lovasz_loss is not None:
+            total_lovasz = 0.0
+            for name, pred in scale_preds.items():
+                lw = self.aux_lovasz_weights.get(name, 0.0)
+                if lw > 0:
+                    total_lovasz += self.lovasz_loss(pred, gt_label_tensor) * lw
+            losses['loss_lovasz'] = total_lovasz * self.lovasz_weight
 
         # 返回损失和所有尺度预测
         return losses, (pred_p2, pred_p3, pred_p4, pred_p5)
