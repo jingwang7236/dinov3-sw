@@ -21,7 +21,12 @@ model = dict(
         out_channels=128,
         extract_ids=[5, 11, 17, 23],
         dino_weight='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
+        # freeze_mode: ViT 主干冻结模式
+        #   'frozen'          — 完全冻结，仅训练 adapter/proj (默认，最省显存)
+        #   'full_finetune'   — 全量微调 ViT 所有参数 (显存需求大)
+        #   'unfreeze_last_n' — 仅解冻最后 N 层 block + norm (需配合 unfreeze_last_n=N)
         freeze_mode="frozen",
+        # unfreeze_last_n=4,  # 仅 freeze_mode='unfreeze_last_n' 时生效
     ),
     decode_head=dict(
         type='ChangeDinoDecoder',

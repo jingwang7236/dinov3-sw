@@ -320,11 +320,13 @@ class DINOv3_Adapter(nn.Module):
         add_vit_feature=True,
         use_extra_extractor=True,
         with_cp=True,
+        backbone_requires_grad=False,
     ):
         super(DINOv3_Adapter, self).__init__()
         self.backbone = backbone
-        # Important: we freeze the backbone
-        self.backbone.requires_grad_(False)
+        self.backbone_requires_grad = backbone_requires_grad
+        if not backbone_requires_grad:
+            self.backbone.requires_grad_(False)
 
         self.pretrain_size = (pretrain_size, pretrain_size)
         self.interaction_indexes = interaction_indexes
@@ -421,10 +423,15 @@ class DINOv3_Adapter(nn.Module):
         bs, C, h, w = x.shape
 
         with torch.autocast("cuda", torch.bfloat16):
-            with torch.no_grad():
+            if self.backbone_requires_grad:
                 all_layers = self.backbone.get_intermediate_layers(
                     x, n=self.interaction_indexes, return_class_token=True
                 )
+            else:
+                with torch.no_grad():
+                    all_layers = self.backbone.get_intermediate_layers(
+                        x, n=self.interaction_indexes, return_class_token=True
+                    )
 
         x_for_shape, _ = all_layers[0]
         bs, _, dim = x_for_shape.shape
@@ -488,8 +495,13 @@ class DINOv3AdapterBackbone(nn.Module):
         device (str): 加载 ViT 时使用的设备。
         extract_ids (List[int]): 交互的 ViT 层索引，同时作为 DINOv3_Adapter
             的 interaction_indexes。ViT-L 共 24 层，默认 [5, 11, 17, 23]。
-        freeze_mode (str): 仅为兼容旧配置保留；DINOv3_Adapter 始终冻结 ViT
-            主干，仅训练 adapter / 投影层（等价于 "frozen"）。
+        freeze_mode (str): ViT 主干冻结模式:
+            - 'frozen': 完全冻结 ViT 主干，仅训练 adapter / 投影层 (默认)。
+            - 'full_finetune': 全量微调，ViT 主干所有参数均可训练。
+            - 'unfreeze_last_n': 仅解冻最后 ``unfreeze_last_n`` 层 transformer
+              block + 最终 norm 层。
+        unfreeze_last_n (int): 当 ``freeze_mode='unfreeze_last_n'`` 时指定
+            解冻的 block 数量。
         pretrain_size (int): ViT 预训练分辨率，用于位置编码插值。
         **kwargs: 透传给 DINOv3_Adapter 的其他参数。
     """
@@ -501,6 +513,7 @@ class DINOv3AdapterBackbone(nn.Module):
         device="cuda",
         extract_ids=[5, 11, 17, 23],
         freeze_mode="frozen",
+        unfreeze_last_n=0,
         pretrain_size=512,
         conv_inplane=64,
         n_points=4,
@@ -519,6 +532,7 @@ class DINOv3AdapterBackbone(nn.Module):
         if device is not None:
             backbone = backbone.to(device)
 
+        init_requires_grad = freeze_mode in ('full_finetune', 'unfreeze_last_n')
         self.adapter = DINOv3_Adapter(
             backbone=backbone,
             interaction_indexes=list(extract_ids),
@@ -529,6 +543,7 @@ class DINOv3AdapterBackbone(nn.Module):
             drop_path_rate=drop_path_rate,
             deform_ratio=deform_ratio,
             with_cp=with_cp,
+            backbone_requires_grad=init_requires_grad,
         )
 
         embed_dim = backbone.embed_dim
@@ -541,6 +556,52 @@ class DINOv3AdapterBackbone(nn.Module):
                 for _ in range(4)
             ]
         )
+
+        # 应用初始冻结模式（处理 unfreeze_last_n 的部分解冻）
+        self._current_freeze_mode = None
+        self._current_unfreeze_n = 0
+        self.set_freeze_mode(freeze_mode, unfreeze_last_n)
+
+    def set_freeze_mode(self, mode='frozen', unfreeze_last_n=0):
+        """动态切换 ViT 主干的冻结模式。
+
+        可在训练过程中调用（如通过 FreezeScheduleHook），切换后 optimizer
+        会自动开始更新新解冻的参数（因为所有参数在初始化时已加入 optimizer，
+        冻结时 grad=None 被跳过，解冻后梯度正常计算）。
+
+        Args:
+            mode (str): 'frozen' / 'full_finetune' / 'unfreeze_last_n'
+            unfreeze_last_n (int): mode='unfreeze_last_n' 时解冻的 block 数
+        """
+        vit = self.adapter.backbone
+
+        if mode == 'frozen':
+            vit.requires_grad_(False)
+            self.adapter.backbone_requires_grad = False
+        elif mode == 'full_finetune':
+            vit.requires_grad_(True)
+            self.adapter.backbone_requires_grad = True
+        elif mode == 'unfreeze_last_n':
+            vit.requires_grad_(False)
+            n_blocks = len(vit.blocks)
+            start = max(0, n_blocks - unfreeze_last_n)
+            for i in range(start, n_blocks):
+                vit.blocks[i].requires_grad_(True)
+            # 解冻最终 norm 层
+            if hasattr(vit, 'norm') and vit.norm is not None:
+                for p in vit.norm.parameters():
+                    p.requires_grad_(True)
+            if hasattr(vit, 'cls_norm') and vit.cls_norm is not None:
+                for p in vit.cls_norm.parameters():
+                    p.requires_grad_(True)
+            self.adapter.backbone_requires_grad = True
+        else:
+            raise ValueError(
+                f"Unknown freeze_mode: '{mode}', expected one of "
+                f"['frozen', 'full_finetune', 'unfreeze_last_n']")
+
+        self._current_freeze_mode = mode
+        self._current_unfreeze_n = unfreeze_last_n
 
     def forward(self, x):
         outs = self.adapter(x)  # dict {"1":..,"4":..}, 通道 = embed_dim
