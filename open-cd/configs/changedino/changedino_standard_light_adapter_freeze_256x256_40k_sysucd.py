@@ -110,7 +110,7 @@ custom_hooks = [
         backbone_attr='backbone',
         schedule=[
             # 阶段1: 冻结 ViT 主干
-            dict(iter=0, freeze_mode='full_finetune'),
+            dict(iter=0, freeze_mode='frozen'),
             # 阶段2: iter=20000 时，加载阶段1 best checkpoint，然后全量微调
             #   load_from 支持 glob 模式，自动匹配 best_mIoU_*.pth
             #   如不想加载 checkpoint，删去 load_from 即可从当前权重继续
