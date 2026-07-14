@@ -20,11 +20,11 @@ _base_ = ['../_base_/default_runtime.py']
 # 数据集
 # ---------------------------------------------------------------------------
 dataset_type = 'DFC2025BRIGHTDataset'
-data_root = '/mnt/ht2-nas2/EO_test/dataset/DFC2025 BRIGHT'
+data_root = '/mnt/ht2-nas2/EO_test/dataset/ChangeDetection/BRIGHT'
 crop_size = (512, 512)
 
 data_prefix = dict(
-    img_path_from='pre-event_wo_ukraine_myanmar_mexico',
+    img_path_from='pre-event',
     img_path_to='post-event',
     seg_map_path='target')
 

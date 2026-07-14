@@ -8,12 +8,12 @@ _base_ = ['../_base_/default_runtime.py']
 # 数据集
 # ---------------------------------------------------------------------------
 dataset_type = 'DFC2025BRIGHTDataset'
-data_root = '/mnt/ht2-nas2/EO_test/dataset/DFC2025 BRIGHT'
+data_root = '/mnt/ht2-nas2/EO_test/dataset/ChangeDetection/BRIGHT'
 crop_size = (256, 256)
 
 # 注意: ann_file 指向 split txt; data_prefix 的 from=光学(3ch), to=SAR(1ch)
 data_prefix = dict(
-    img_path_from='pre-event_wo_ukraine_myanmar_mexico',
+    img_path_from='pre-event',
     img_path_to='post-event',
     seg_map_path='target')
 
