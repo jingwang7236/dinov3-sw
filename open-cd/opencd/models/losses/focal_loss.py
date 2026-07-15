@@ -1,3 +1,5 @@
+from typing import List, Optional, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,10 +36,12 @@ class FocalLoss(nn.Module):
             pt = pred_prob.clamp(1e-8, 1 - 1e-8)
             focal_weight = (1 - pt) ** self.gamma
             if self.alpha is not None:
-                # 与官方 [alpha, 1-alpha] gather(target) 对齐：
-                # 变化类(1)->0.75, 背景类(0)->0.25
-                alpha_weight = torch.where(target_safe == 1, 1 - self.alpha, self.alpha)
-                focal_weight = alpha_weight * focal_weight
+                if isinstance(self.alpha, (list, tuple)):
+                    alpha_map = torch.tensor(
+                        self.alpha, device=target_safe.device,
+                        dtype=torch.float32)
+                    alpha_weight = alpha_map[target_safe]
+                    focal_weight = alpha_weight * focal_weight
             loss = -focal_weight * torch.log(pt)
         
         # 4. 将无效像素的 loss 设为 0

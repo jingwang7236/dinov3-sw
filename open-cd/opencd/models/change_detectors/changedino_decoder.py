@@ -62,6 +62,8 @@ class ChangeDinoDecoder(nn.Module):
         aux_loss_weights: dict = None,
         ignore_index: int = 255,
         lovasz_weight: float = 0.0,
+        focal_alpha: Union[float, List[float], None] = 0.25,
+        focal_gamma: float = 4.0,
         **kwargs,
     ):
         super().__init__()
@@ -71,10 +73,15 @@ class ChangeDinoDecoder(nn.Module):
         self.num_classes = num_classes
         self.out_channels = num_classes
         self.ignore_index = ignore_index
-        # Focal Loss (与官方一致: gamma=4.0)
+        # Focal Loss
+        # alpha=None 时不施加类别权重(仅 gamma 硬例挖掘);
+        # alpha=list 时按类别施加权重, 适合多分类不平衡场景
+        if focal_alpha is not None and isinstance(focal_alpha, (list, tuple)):
+            assert len(focal_alpha) == num_classes, \
+                f'focal_alpha 长度({len(focal_alpha)})须等于 num_classes({num_classes})'
         self.focal_loss = FocalLoss(
-            alpha=0.25,
-            gamma=4.0,
+            alpha=focal_alpha,
+            gamma=focal_gamma,
             ignore_index=ignore_index
         )
         # Dice Loss

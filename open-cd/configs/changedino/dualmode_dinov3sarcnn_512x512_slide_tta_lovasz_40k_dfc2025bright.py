@@ -1,18 +1,21 @@
-# DFC2025 BRIGHT 前光后 SAR 变化检测 — 512 滑窗 + TTA + Lovász
+# DFC2025 BRIGHT 前光后 SAR 变化检测 — 4 分类 + 512 滑窗 + TTA + Lovász
 # ============================================================================
-# 实验目的: 相比 256 基线配置，验证以下三项改进的增益:
+# 实验目的: 相比 256 基线配置，验证以下四项改进的增益:
 #   ① crop_size=512 (训练更大裁剪块, 感受野更充分)
 #   ② 滑窗推理 (test 时不 resize 到 256, 而是滑窗处理原始 1024×1024)
 #   ③ TTA (水平翻转增强推理, logit 平均)
 #   ④ Lovász Loss (直接优化 IoU/Jaccard, 与 Focal+Dice 联合)
 #
 # 相比 dualmode_dinov3sarcnn_256x256_40k_dfc2025bright.py 的差异:
+#   - num_classes: 4 (0=背景, 1=intact, 2=damaged, 3=destroyed), 复现论文 Table
+#   - binarize_label=False (标签保持 4 值, 不合并为二分类)
 #   - crop_size: 256 → 512
 #   - train batch_size: 64 → 16 (显存换算)
 #   - test_cfg: mode='whole' → mode='slide' with crop_size=512, stride=341
 #   - test_pipeline: 去掉 MultiImgResize (保留原始 1024 分辨率)
 #   - model.tta_flips: None → [3] (水平翻转 TTA)
 #   - decode_head.lovasz_weight: 0 → 1.0 (启用 Lovász Loss)
+#   - 移除 refiner(LearnableSoftMorph 仅支持二分类)
 # ============================================================================
 _base_ = ['../_base_/default_runtime.py']
 
@@ -63,19 +66,15 @@ model = dict(
         type='ChangeDinoCrossAttnDecoder',
         fpn_channels=128,
         n_layers=[1, 1, 1, 1],
-        num_classes=2,
+        num_classes=4,
         align_corners=False,
         ignore_index=255,
         cross_num_heads=4,
         window_size=8,
+        focal_alpha=None,        # 多分类: 关闭二分类 alpha 权重, 依赖 gamma+Lovász
         lovasz_weight=1.0,      # 启用 Lovász Loss
     ),
-    refiner=dict(
-        type='LearnableSoftMorph',
-        k_open=3,
-        k_close=5,
-        tau=0.05,
-    ),
+    # refiner(LearnableSoftMorph) 仅支持二分类(断言 C==2), 4 分类下移除
     tta_flips=[3],              # TTA: 水平翻转 (dim=3 in [N,C,H,W])
     train_cfg=dict(),
     # 滑窗推理: 原始图 1024×1024, crop=512, stride=341 → 3×3 重叠网格
@@ -121,6 +120,7 @@ train_dataloader = dict(
         data_root=data_root,
         ann_file='train_set.txt',
         data_prefix=data_prefix,
+        binarize_label=False,
         pipeline=train_pipeline))
 
 # 滑窗推理需逐图处理, batch_size=1
@@ -134,6 +134,7 @@ val_dataloader = dict(
         data_root=data_root,
         ann_file='val_set.txt',
         data_prefix=data_prefix,
+        binarize_label=False,
         pipeline=test_pipeline))
 
 test_dataloader = dict(
@@ -146,6 +147,7 @@ test_dataloader = dict(
         data_root=data_root,
         ann_file='test_set.txt',
         data_prefix=data_prefix,
+        binarize_label=False,
         pipeline=test_pipeline))
 
 val_evaluator = dict(type='mmseg.IoUMetric', iou_metrics=['mFscore', 'mIoU'])

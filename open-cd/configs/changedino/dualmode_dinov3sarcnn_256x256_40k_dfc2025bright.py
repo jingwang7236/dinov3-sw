@@ -25,8 +25,9 @@ norm_cfg = dict(type='SyncBN', requires_grad=True)
 # 已在 train_set 上抽样统计得到 (0-255):
 #   光学 mean=[73.17, 82.67, 86.77] std=[53.27, 58.12, 67.28]
 #   SAR  mean=56.38 std=44.49
-# 标签 building_damage 为 4 值(0=未损毁, 1/2/3=损毁程度), 数据集默认
-# binarize_label=True 合并为 0/1 二分类, 故 num_classes=2。
+# 标签 building_damage 为 4 值(0=背景, 1=未损毁intact, 2=损毁damaged,
+# 3=完全损毁destroyed)。设 binarize_label=False 做 4 分类损毁分级,
+# 配合 num_classes=4 以复现论文 Table 中的 mIoU/F1 指标。
 data_preprocessor = dict(
     type='DualInputSegDataPreProcessor',
     mean=[73.17, 82.67, 86.77, 56.38, 56.38, 56.38],
@@ -58,18 +59,14 @@ model = dict(
         type='ChangeDinoCrossAttnDecoder',   # 双向交叉注意力, 适合异构模态
         fpn_channels=128,
         n_layers=[1, 1, 1, 1],
-        num_classes=2,
+        num_classes=4,
         align_corners=False,
         ignore_index=255,
         cross_num_heads=4,
         window_size=8,
+        focal_alpha=None,        # 多分类: 关闭二分类 alpha 权重, 依赖 gamma
     ),
-    refiner=dict(
-        type='LearnableSoftMorph',
-        k_open=3,
-        k_close=5,
-        tau=0.05,
-    ),
+    # refiner(LearnableSoftMorph) 仅支持二分类(断言 C==2), 4 分类下移除
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
 
@@ -109,6 +106,7 @@ train_dataloader = dict(
         data_root=data_root,
         ann_file='train_set.txt',
         data_prefix=data_prefix,
+        binarize_label=False,
         pipeline=train_pipeline))
 
 val_dataloader = dict(
@@ -121,6 +119,7 @@ val_dataloader = dict(
         data_root=data_root,
         ann_file='val_set.txt',
         data_prefix=data_prefix,
+        binarize_label=False,
         pipeline=test_pipeline))
 
 test_dataloader = dict(
@@ -133,6 +132,7 @@ test_dataloader = dict(
         data_root=data_root,
         ann_file='test_set.txt',
         data_prefix=data_prefix,
+        binarize_label=False,
         pipeline=test_pipeline))
 
 val_evaluator = dict(type='mmseg.IoUMetric', iou_metrics=['mFscore', 'mIoU'])

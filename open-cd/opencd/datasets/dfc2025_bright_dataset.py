@@ -46,9 +46,14 @@ class DFC2025BRIGHTDataset(_BaseCDDataset):
             'to_binary' 冲突）。
     """
 
-    METAINFO = dict(
+    # 二分类 METAINFO
+    _METAINFO_BINARY = dict(
         classes=('unchanged', 'changed'),
         palette=[[0, 0, 0], [255, 255, 255]])
+    # 4 分类 METAINFO (与论文 Table 3 一致)
+    _METAINFO_MULTI = dict(
+        classes=('background', 'intact', 'damaged', 'destroyed'),
+        palette=[[0, 0, 0], [0, 255, 0], [255, 255, 0], [255, 0, 0]])
 
     # 4 值标签 -> 二分类的合并映射
     _BINARIZE_MAP = {1: 1, 2: 1, 3: 1}
@@ -67,6 +72,11 @@ class DFC2025BRIGHTDataset(_BaseCDDataset):
         self.post_suffix = post_suffix
         self.label_suffix = label_suffix
         self.binarize_label = binarize_label
+        # 根据 binarize_label 动态设定 METAINFO(类别名/调色板)，必须在
+        # super().__init__ 之前设置，因为 get_label_map 是 classmethod，
+        # 它读取 cls.METAINFO 来决定 label_map。
+        type(self).METAINFO = (self._METAINFO_BINARY if binarize_label
+                               else self._METAINFO_MULTI)
         super().__init__(
             ann_file=ann_file,
             img_suffix=img_suffix,
