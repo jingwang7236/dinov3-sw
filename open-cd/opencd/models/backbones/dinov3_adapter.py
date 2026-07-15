@@ -3,7 +3,11 @@
 # This software may be used and distributed in accordance with
 # the terms of the DINOv3 License Agreement.
 
+import logging
 import math
+import os
+import re
+from collections import OrderedDict
 from functools import partial
 
 import torch
@@ -14,6 +18,88 @@ import torch.utils.checkpoint as cp
 from opencd.registry import MODELS
 from opencd.models.blocks.adapter import SepAdapterBlock, REPO_DIR, DINO_NAME
 from opencd.models.blocks.ms_deform_attn import MSDeformAttn
+
+logger = logging.getLogger(__name__)
+
+
+def _is_official_dino_weights(weights):
+    """判断 weights 路径是否为官方 DINOv3 权重（文件名含 -XXXXXXXX.pth 哈希）。"""
+    if not isinstance(weights, str):
+        return True
+    pattern = r"-(.{8})\.pth$"
+    return re.search(pattern, os.path.basename(weights)) is not None
+
+
+def _clean_self_state_dict(state):
+    """参考 load_checkpoint_forward.py 清理自研 checkpoint 的 key 前缀。"""
+    cleaned = OrderedDict()
+    for k, v in state.items():
+        new_k = k
+        for prefix in [
+            "model.student.",
+            "model.teacher.",
+            "module.student.",
+            "module.teacher.",
+            "student.",
+            "teacher.",
+            "model.",
+            "module.",
+            "backbone.",
+        ]:
+            if new_k.startswith(prefix):
+                new_k = new_k[len(prefix):]
+                break
+        new_k = new_k.replace("_orig_mod.", "")
+        new_k = new_k.replace("_checkpoint_wrapped_module.", "")
+        cleaned[new_k] = v
+    return cleaned
+
+
+def _extract_self_dino_state_dict(ckpt):
+    """从自研 checkpoint 中提取 ViT 主干的 state_dict。
+
+    支持多种顶层结构：ckpt['model'/'state_dict'/'student'/'teacher']，
+    或顶层直接为 tensor dict。
+    """
+    if isinstance(ckpt, dict):
+        for key in ("model", "state_dict", "student", "teacher"):
+            if key in ckpt and isinstance(ckpt[key], dict):
+                logger.info(f"Using ckpt['{key}'] ({len(ckpt[key])} keys)")
+                return ckpt[key]
+        # 顶层直接为 state_dict（过滤非 tensor）
+        has_tensors = any(isinstance(v, torch.Tensor) for v in ckpt.values())
+        if has_tensors:
+            state = {k: v for k, v in ckpt.items() if isinstance(v, torch.Tensor)}
+            logger.info(f"Using top-level dict as state_dict ({len(state)} tensor keys)")
+            return state
+    # 已经是 state_dict
+    return ckpt
+
+
+def load_self_dino_weights(model, ckpt_path):
+    """加载自研 DINOv3 预训练权重到 DinoVisionTransformer 模型。
+
+    采用 strict=False 加载，兼容 student ModuleDict 中 backbone.* 等 key。
+    """
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    raw_state = _extract_self_dino_state_dict(ckpt)
+    cleaned = _clean_self_state_dict(raw_state)
+    return load_self_dino_weights_from_state(model, cleaned)
+
+
+def load_self_dino_weights_from_state(model, cleaned_state):
+    """将已清理的 state_dict 加载到 DinoVisionTransformer 模型（strict=False）。"""
+    msg = model.load_state_dict(cleaned_state, strict=False)
+    matched = len(cleaned_state) - len(msg.unexpected_keys)
+    logger.info(
+        f"Loaded self-trained DINOv3 weights: matched={matched}, "
+        f"missing={len(msg.missing_keys)}, unexpected={len(msg.unexpected_keys)}"
+    )
+    if msg.missing_keys:
+        logger.warning(f"Missing keys (first 10): {msg.missing_keys[:10]}")
+    if msg.unexpected_keys:
+        logger.warning(f"Unexpected keys (first 10): {msg.unexpected_keys[:10]}")
+    return model
 
 
 def drop_path(x, drop_prob: float = 0.0, training: bool = False):
@@ -503,6 +589,14 @@ class DINOv3AdapterBackbone(nn.Module):
         unfreeze_last_n (int): 当 ``freeze_mode='unfreeze_last_n'`` 时指定
             解冻的 block 数量。
         pretrain_size (int): ViT 预训练分辨率，用于位置编码插值。
+        weights_type (str): 权重类型，决定加载方式:
+            - 'auto' (默认): 根据文件名自动判断（含 -XXXXXXXX.pth 哈希视为官方）。
+            - 'official': 官方 DINOv3 权重，走 torch.hub.load 标准流程。
+            - 'self_trained': 自研权重，按 student checkpoint 结构清理 key 后
+              strict=False 加载（参考 load_checkpoint_forward.py）。
+        untie_global_and_local_cls_norm (bool | None): 仅对自研权重生效,
+            指定 ViT 架构的 untie_global_and_local_cls_norm。None 时自动从
+            checkpoint 推断；自研权重若基于 SAT493M 通常需要 True。
         **kwargs: 透传给 DINOv3_Adapter 的其他参数。
     """
 
@@ -521,13 +615,76 @@ class DINOv3AdapterBackbone(nn.Module):
         drop_path_rate=0.3,
         deform_ratio=0.5,
         with_cp=True,
+        weights_type="auto",
+        untie_global_and_local_cls_norm=None,
         **kwargs,
     ):
         super().__init__()
 
-        backbone = torch.hub.load(
-            REPO_DIR, DINO_NAME, source="local", weights=dino_weight
-        )
+        # 解析 weights_type：'auto' 时按文件名自动判断
+        if weights_type == "auto":
+            is_self_trained = not _is_official_dino_weights(dino_weight)
+        elif weights_type == "official":
+            is_self_trained = False
+        elif weights_type == "self_trained":
+            is_self_trained = True
+        else:
+            raise ValueError(
+                f"Unknown weights_type: '{weights_type}', expected one of "
+                f"['auto', 'official', 'self_trained']"
+            )
+
+        if not is_self_trained:
+            # 官方权重：走 torch.hub.load 的标准下载/加载流程
+            backbone = torch.hub.load(
+                REPO_DIR, DINO_NAME, source="local", weights=dino_weight
+            )
+        else:
+            # 自研权重：先构建无预训练权重的 ViT，再按 student checkpoint
+            # 的结构清理 key 后 strict=False 加载（参考 load_checkpoint_forward.py）
+            logger.info(f"Loading self-trained DINOv3 weights from: {dino_weight}")
+            # 只加载一次 checkpoint
+            ckpt = torch.load(dino_weight, map_location="cpu", weights_only=False)
+            raw_state = _extract_self_dino_state_dict(ckpt)
+            cleaned = _clean_self_state_dict(raw_state)
+            # 自动推断 untie_global_and_local_cls_norm
+            untie = untie_global_and_local_cls_norm
+            if untie is None:
+                untie = any("cls_norm" in k for k in cleaned.keys())
+                logger.info(
+                    f"Auto-inferred untie_global_and_local_cls_norm={untie} "
+                    f"from checkpoint keys"
+                )
+            # 直接调用 _make_dinov3_vit 构建 ViT-L（pretrained=False，避免下载），
+            # 并显式传入 untie_global_and_local_cls_norm（dinov3_vitl16 不允许通过
+            # kwargs 覆盖该参数）。架构参数与 dinov3_vitl16 保持一致。
+            from dinov3.hub.backbones import _make_dinov3_vit
+            backbone = _make_dinov3_vit(
+                img_size=224,
+                patch_size=16,
+                in_chans=3,
+                pos_embed_rope_base=100,
+                pos_embed_rope_normalize_coords="separate",
+                pos_embed_rope_rescale_coords=2,
+                pos_embed_rope_dtype="fp32",
+                embed_dim=1024,
+                depth=24,
+                num_heads=16,
+                ffn_ratio=4,
+                qkv_bias=True,
+                drop_path_rate=0.0,
+                layerscale_init=1.0e-05,
+                norm_layer="layernormbf16",
+                ffn_layer="mlp",
+                ffn_bias=True,
+                proj_bias=True,
+                n_storage_tokens=4,
+                mask_k_bias=True,
+                untie_global_and_local_cls_norm=untie,
+                pretrained=False,
+                compact_arch_name="vitl",
+            )
+            load_self_dino_weights_from_state(backbone, cleaned)
         backbone = backbone.eval()
         if device is not None:
             backbone = backbone.to(device)
