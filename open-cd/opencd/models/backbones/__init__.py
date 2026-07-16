@@ -14,6 +14,7 @@ from .cgnet import CGNet
 from .dinov3 import DinoV3Backbone, SiameseDinoV3Backbone
 from .changedino_encoder import ChangeDinoEncoder, ChangeDinoEncoderOnlyDino, ChangeDinoEncoderLoRA
 from .dinov3_adapter import DINOv3AdapterBackbone
+from .swin_distill_adapter import SwinDistillBackbone, SwinDistillAdapterBackbone
 from .sar_cnn_encoder import SARCNNEncoder
 
 __all__ = ['IA_ResNetV1c', 'IA_ResNeSt', 'FC_EF', 'FC_Siam_diff', 
@@ -25,5 +26,6 @@ __all__ = ['IA_ResNetV1c', 'IA_ResNeSt', 'FC_EF', 'FC_Siam_diff',
            'ChangeDinoEncoder', 'ChangeDinoEncoderOnlyDino',
            'ChangeDinoEncoderLoRA',
            'DINOv3AdapterBackbone',
+           'SwinDistillBackbone', 'SwinDistillAdapterBackbone',
            'SARCNNEncoder'
            ]
