@@ -323,5 +323,3 @@ class SwinDistillBackbone(nn.Module):
         return out
 
 
-# 向后兼容别名
-SwinDistillAdapterBackbone = SwinDistillBackbone
