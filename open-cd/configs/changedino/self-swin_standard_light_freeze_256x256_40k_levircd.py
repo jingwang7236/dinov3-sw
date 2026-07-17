@@ -66,7 +66,7 @@ train_pipeline = [
     dict(type='MultiImgPackSegInputs')
 ]
 train_dataloader = dict(
-    batch_size=24,
+    batch_size=16,
     dataset=dict(pipeline=train_pipeline))
 
 test_pipeline = [
