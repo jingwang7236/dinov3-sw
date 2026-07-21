@@ -1,0 +1,528 @@
+"""Eval wrapper contract to be able to run evals on a model."""
+
+from logging import getLogger
+from typing import Any
+
+import torch
+from einops import rearrange, reduce
+from torch import nn
+
+from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
+from olmoearth_pretrain.evals.datasets.configs import TaskType
+from olmoearth_pretrain.evals.models import (
+    AnySat,
+    Clay,
+    Croma,
+    DINOv3,
+    GalileoWrapper,
+    Panopticon,
+    PrestoWrapper,
+    PrithviV2,
+    Satlas,
+    Terramind,
+    Tessera,
+)
+from olmoearth_pretrain.nn.flexi_vit import (
+    FlexiVitBase,
+    TokensAndMasks,
+)
+from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
+from olmoearth_pretrain.nn.st_model import STBase
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
+
+logger = getLogger(__name__)
+
+
+class EvalWrapper:
+    """Base class for eval wrappers.
+
+    This is the common interface to run our evals on any model
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        task_type: TaskType,
+        patch_size: int,
+        pooling_type: PoolingType,
+        concat_features: bool = False,
+        use_pooled_tokens: bool = False,
+        use_center_token: bool = False,
+    ):
+        """Initialize the eval wrapper.
+
+        Args:
+            model: The model to evaluate.
+            task_type: The type of task to evaluate.
+            patch_size: The patch size to use for the model.
+            pooling_type: The pooling type to use for the model.
+            concat_features: Whether to concatenate features across modalities.
+            use_pooled_tokens: Whether to use pooled tokens.
+            use_center_token: Whether to use the center spatial patch embedding instead
+                of pooling across all patches for classification tasks.
+        """
+        super().__init__()
+        self.model = model
+        self.task_type = task_type
+        self.patch_size = patch_size
+        self.pooling_type = pooling_type
+        self.concat_features = concat_features
+        # SEGMENTATION and (dense) REGRESSION keep the spatial grid for per-pixel
+        # heads. CLASSIFICATION and WINDOW_REGRESSION are per-sample, so they pool
+        # over space to a single (B, D) embedding.
+        self.spatial_pool = task_type in (
+            TaskType.SEGMENTATION,
+            TaskType.PER_PIXEL_REGRESSION,
+        )
+        self.use_pooled_tokens = use_pooled_tokens
+        self.use_center_token = use_center_token
+        if self.use_center_token and self.spatial_pool:
+            raise ValueError(
+                "use_center_token is only supported for classification tasks, "
+                "not segmentation (spatial_pool=True)"
+            )
+        if self.use_pooled_tokens:
+            assert isinstance(self.model, EncodeEarlyAttnPool), (
+                "Pooled tokens are only supported for EncodeEarlyAttnPool"
+            )
+
+    @property
+    def device(self) -> torch.device:
+        """Get the device of the model."""
+        dev = getattr(self.model, "device", None)
+
+        if isinstance(dev, torch.device):
+            return dev
+
+        if isinstance(dev, str):
+            return torch.device(dev)
+
+        # For FSDP wrapped models, fall back to device of model parameters
+        return next(self.model.parameters()).device
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate attribute access to the underlying model if the attribute is not found on the wrapper."""
+        return getattr(self.model, name)
+
+    @staticmethod
+    def _extract_center_token(spatial_embeddings: torch.Tensor) -> torch.Tensor:
+        """Extract the center spatial patch embedding.
+
+        Args:
+            spatial_embeddings: Tensor of shape (B, H, W, D).
+
+        Returns:
+            Tensor of shape (B, D) from the center patch.
+        """
+        H, W = spatial_embeddings.shape[1], spatial_embeddings.shape[2]
+        return spatial_embeddings[:, H // 2, W // 2, :]
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        raise NotImplementedError("Subclasses must implement this method")
+
+
+class OlmoEarthEvalWrapper(EvalWrapper):
+    """Wrapper for OlmoEarth Pretrain models."""
+
+    @staticmethod
+    def _has_missing_tokens(masked_olmoearth_sample: MaskedOlmoEarthSample) -> bool:
+        for name, value in masked_olmoearth_sample.as_dict().items():
+            if name.endswith("_mask") and value is not None:
+                if (value == MaskValue.MISSING.value).any():
+                    return True
+        return False
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        if not self.use_pooled_tokens:
+            fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
+            batch_embeddings: TokensAndMasks = self.model(
+                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
+            )["tokens_and_masks"]  # (bsz, dim)
+            # Concat features across modalities in space averaged across time
+            if self.use_center_token:
+                # Get spatial embeddings (B, H, W, D) then take center patch
+                batch_embeddings = pool_unmasked_tokens(
+                    batch_embeddings,
+                    self.pooling_type,
+                    spatial_pooling=True,
+                    concat_features=self.concat_features,
+                )
+                batch_embeddings = self._extract_center_token(batch_embeddings)
+            else:
+                batch_embeddings = pool_unmasked_tokens(
+                    batch_embeddings,
+                    self.pooling_type,
+                    spatial_pooling=self.spatial_pool,
+                    concat_features=self.concat_features,
+                )
+        else:
+            pooled_tokens_dict = self.model(
+                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
+            )["pooled_tokens_and_masks"]
+            pooled_tokens = pooled_tokens_dict["modality_pooled_tokens"]
+            # spatial pool is true means we want to keep the spatial dimensions
+            # so here we just need to pool across time
+            logger.info(f"pooled tokens shape in eval wrapper: {pooled_tokens.shape}")
+
+            if self.spatial_pool:
+                # B H W T C
+                if pooled_tokens.shape[1] == 1 and pooled_tokens.ndim == 3:
+                    # unsqueeze to get a W H C T
+                    pooled_tokens = pooled_tokens.unsqueeze(1)
+                pooled_tokens = reduce(
+                    pooled_tokens, "b h w ... d -> b h w d", self.pooling_type
+                )
+            elif self.use_center_token:
+                # Pool time but keep spatial, then take center patch
+                if pooled_tokens.shape[1] == 1 and pooled_tokens.ndim == 3:
+                    pooled_tokens = pooled_tokens.unsqueeze(1)
+                pooled_tokens = reduce(
+                    pooled_tokens, "b h w ... d -> b h w d", self.pooling_type
+                )
+                pooled_tokens = self._extract_center_token(pooled_tokens)
+            else:
+                # Take the mean of all dims except the first and last
+                pooled_tokens = reduce(
+                    pooled_tokens, "b ... d -> b d", self.pooling_type
+                )
+            batch_embeddings = pooled_tokens
+        return batch_embeddings, labels
+
+
+HeliosEvalWrapper = _deprecated_class_alias(
+    OlmoEarthEvalWrapper, "helios.evals.eval_wrapper.HeliosEvalWrapper"
+)
+
+
+class TerramindEvalWrapper(EvalWrapper):
+    """Wrapper for Terramind models."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
+class PanopticonEvalWrapper(EvalWrapper):
+    """Wrapper for Panopticon models."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        if self.spatial_pool or self.use_center_token:
+            # Intermediate features are not yet working because of some bug internal to the model
+            batch_embeddings = self.model.forward_features(
+                masked_olmoearth_sample, pooling=self.pooling_type
+            )
+            if self.use_center_token:
+                batch_embeddings = self._extract_center_token(batch_embeddings)
+        else:
+            batch_embeddings = self.model(
+                masked_olmoearth_sample, pooling=self.pooling_type
+            )
+        return batch_embeddings, labels
+
+
+class GalileoEvalWrapper(EvalWrapper):
+    """Wrapper for Galileo models."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            embeddings = self._extract_center_token(embeddings)
+        return embeddings, labels
+
+
+class AnySatEvalWrapper(EvalWrapper):
+    """Wrapper for AnySat model."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            embeddings = self._extract_center_token(embeddings)
+            return embeddings, labels
+        if is_train and (self.task_type == TaskType.SEGMENTATION):
+            # this is a special case for AnySat. Since it outputs per-pixel embeddings,
+            # we subsample training pixels to keep the memory requirements reasonable.
+            # From https://arxiv.org/abs/2502.09356:
+            # """
+            # for semantic segmentation, the AnySat features are per-pixel
+            # instead of per-patch. For comparable training cost, we sam-
+            # ple 6.25% of its pixel features per image when training, but
+            # evaluate with all pixel features when testing. We confirmed
+            # the fairness of this evaluation with the the AnySat authors
+            # by personal communication.
+            # """
+            subsample_by = 1 / 16
+            embeddings = rearrange(embeddings, "b h w d -> b (h w) d")
+            labels = rearrange(labels, "b h w -> b (h w)")
+
+            assert embeddings.shape[1] == labels.shape[1]
+            num_tokens = embeddings.shape[1]
+            num_tokens_to_keep = int(num_tokens * subsample_by)
+            sampled_indices = torch.randperm(num_tokens)[:num_tokens_to_keep]
+            embeddings = embeddings[:, sampled_indices]
+            labels = labels[:, sampled_indices]
+
+            new_hw = int(num_tokens_to_keep**0.5)
+            # reshape to h w
+            embeddings = rearrange(
+                embeddings, "b (h w) d -> b h w d", h=new_hw, w=new_hw
+            )
+            labels = rearrange(labels, "b (h w) -> b h w", h=new_hw, w=new_hw)
+        return embeddings, labels
+
+
+class PrithviV2EvalWrapper(EvalWrapper):
+    """Wrapper for PrithviV2 model."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            embeddings = self._extract_center_token(embeddings)
+        return embeddings, labels
+
+
+class ClayEvalWrapper(EvalWrapper):
+    """Wrapper for Clay models."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
+class CromaEvalWrapper(EvalWrapper):
+    """Wrapper for Croma models."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
+class PrestoEvalWrapper(EvalWrapper):
+    """Wrapper for Presto model."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
+class DINOv3EvalWrapper(EvalWrapper):
+    """Wrapper for DINOv3 models."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        # i need to do the apply imagenet normalizer thing in here
+        if self.spatial_pool or self.use_center_token:
+            # Intermediate features are not yet working because of some bug internal to the model
+            batch_embeddings = self.model.forward_features(
+                masked_olmoearth_sample,
+                pooling=self.pooling_type,
+            )
+            if self.use_center_token:
+                batch_embeddings = self._extract_center_token(batch_embeddings)
+        else:
+            # should this call model ditectly
+            batch_embeddings = self.model(
+                masked_olmoearth_sample,
+                pooling=self.pooling_type,
+            )
+        return batch_embeddings, labels
+
+
+class SatlasEvalWrapper(EvalWrapper):
+    """Wrapper for Satlas models."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
+class TesseraEvalWrapper(EvalWrapper):
+    """Wrapper for Tessera models."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
+def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
+    """Factory function to get the appropriate eval wrapper for a given model.
+
+    Args:
+        model: The model to evaluate.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        The appropriate eval wrapper for the given model.
+    """
+    if isinstance(model, FlexiVitBase) or isinstance(model, STBase):
+        logger.info("Using OlmoEarthEvalWrapper")
+        return OlmoEarthEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Panopticon):
+        logger.info("Using PanopticonEvalWrapper")
+        return PanopticonEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, DINOv3):
+        logger.info("Using DINOv3EvalWrapper")
+        return DINOv3EvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Croma):
+        logger.info("Using CromaEvalWrapper")
+        return CromaEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Clay):
+        logger.info("Using ClayEvalWrapper")
+        return ClayEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, GalileoWrapper):
+        logger.info("Using GalileoEvalWrapper")
+        return GalileoEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Terramind):
+        logger.info("Using TerramindEvalWrapper")
+        return TerramindEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, PrestoWrapper):
+        logger.info("Using PrestoEvalWrapper")
+        return PrestoEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, AnySat):
+        logger.info("Using AnySatEvalWrapper")
+        return AnySatEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Satlas):
+        logger.info("Using SatlasEvalWrapper")
+        return SatlasEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Tessera):
+        logger.info("Using TesseraEvalWrapper")
+        return TesseraEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, PrithviV2):
+        logger.info("Using PrithviEvalWrapper")
+        return PrithviV2EvalWrapper(model=model, **kwargs)
+    else:
+        raise NotImplementedError(f"No EvalWrapper for model type {type(model)}")

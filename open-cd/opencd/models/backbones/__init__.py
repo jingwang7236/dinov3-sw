@@ -16,6 +16,7 @@ from .changedino_encoder import ChangeDinoEncoder, ChangeDinoEncoderOnlyDino, Ch
 from .dinov3_adapter import DINOv3AdapterBackbone
 from .swin_distill_encoder import SwinDistillBackbone, SwinDistillAdapterBackbone
 from .sar_cnn_encoder import SARCNNEncoder
+from .sar_olmoearth_encoder import OlmoEarthSAREncoder
 
 __all__ = ['IA_ResNetV1c', 'IA_ResNeSt', 'FC_EF', 'FC_Siam_diff', 
            'FC_Siam_conc', 'SNUNet_ECAM', 'TinyCD', 'IFN',
@@ -27,5 +28,5 @@ __all__ = ['IA_ResNetV1c', 'IA_ResNeSt', 'FC_EF', 'FC_Siam_diff',
            'ChangeDinoEncoderLoRA',
            'DINOv3AdapterBackbone',
             'SwinDistillBackbone', 'SwinDistillAdapterBackbone',
-           'SARCNNEncoder'
+           'SARCNNEncoder', 'OlmoEarthSAREncoder'
            ]
