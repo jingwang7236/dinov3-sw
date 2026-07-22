@@ -8,7 +8,8 @@ from .mtkd import (DistillSiamEncoderDecoder,
                    DistillSiamEncoderDecoder_ChangeStar, 
                    DistillDIEncoderDecoder, DistillBAN, 
                    DistillTimeTravellingPixels)
-from .changedino_decoder import ChangeDinoDecoder, ChangeDinoCrossAttnDecoder
+from .changedino_decoder import (ChangeDinoDecoder, ChangeDinoCrossAttnDecoder,
+                                ChangeDinoHybridCrossAttnDecoder)
 from .changedino_encoder_decoder import ChangeDinoEncoderDecoder
 from .dual_mode_encoder_decoder import DualModeBranchEncoderDecoder
 from .freeze_schedule_hook import FreezeScheduleHook
@@ -18,6 +19,7 @@ __all__ = ['SiamEncoderDecoder', 'DIEncoderDecoder', 'SiamEncoderMultiDecoder',
            'DistillSiamEncoderDecoder_ChangeStar', 'DistillDIEncoderDecoder',
            'DistillBAN', 'DistillTimeTravellingPixels',
            'ChangeDinoDecoder', 'ChangeDinoCrossAttnDecoder',
+           'ChangeDinoHybridCrossAttnDecoder',
            'ChangeDinoEncoderDecoder',
            'DualModeBranchEncoderDecoder',
            'FreezeScheduleHook']

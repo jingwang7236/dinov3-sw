@@ -603,3 +603,107 @@ class ChangeDinoCrossAttnDecoder(ChangeDinoDecoder):
         feat_p2 = self.tb2(feat_p2)
 
         return [feat_p2, feat_p3, feat_p4, feat_p5]
+
+
+class ContextFuse(nn.Module):
+    """双时相上下文(绝对外观)融合模块。
+
+    与 :class:`CrossAttnFusion`（输出 a1-a2 的差异特征）互补：本模块将两时相
+    特征沿通道拼接后投影，保留原始外观的联合表征。这样"未变化"区域（例如
+    BRIGHT 损毁分级中的 Intact 未损毁建筑）也能拥有可分辨的信号，弥补纯差异
+    分支对该类信号过弱、导致 IoU 偏低的问题。
+
+    Args:
+        dim (int): 单时相输入通道数。
+        bias (bool): 卷积是否带偏置。
+    """
+
+    def __init__(self, dim: int, bias: bool = False):
+        super().__init__()
+        self.proj = nn.Sequential(
+            nn.Conv2d(2 * dim, dim, 1, bias=bias),
+            nn.BatchNorm2d(dim),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, t1: torch.Tensor, t2: torch.Tensor) -> torch.Tensor:
+        if t1.shape[-2:] != t2.shape[-2:]:
+            t1 = F.interpolate(
+                t1, size=t2.shape[-2:], mode="bilinear", align_corners=False
+            )
+        return self.proj(torch.cat([t1, t2], dim=1))
+
+
+@MODELS.register_module()
+class ChangeDinoHybridCrossAttnDecoder(ChangeDinoCrossAttnDecoder):
+    """叠加上下文(绝对)特征的混合交叉注意力 ChangeDino Decoder。
+
+    动机：纯差异特征（交叉注意力 ``a1 - a2``）对"未变化"类别（BRIGHT 中的
+    Intact 未损毁建筑）信号极弱，导致其 IoU 显著低于直接拼接特征的
+    UNet / DeepLabV3+。本解码器在每个尺度同时计算 *change*（差异）与
+    *context*（双时相联合外观）两路特征，并通过可学习门控加权融合，从而在
+    保持变化检测能力的同时提升未变化类别的可分性。
+
+    其余结构与 :class:`ChangeDinoCrossAttnDecoder` 完全一致，旧配置不受影响。
+    新配置只需将 ``type`` 改为本类，并按需指定 ``use_context`` /
+    ``context_weight`` / ``gate_init``。
+
+    额外 Args:
+        use_context (bool): 是否启用上下文融合分支 (default: True)。
+        context_weight (float): 上下文分支的固定缩放系数 (default: 1.0)。
+        gate_init (float): 各尺度可学习门控的初始值（经 sigmoid 后决定上下文
+            分支占比）。默认 -1.0（sigmoid≈0.27），训练中自适应调整。
+    """
+
+    def __init__(
+        self,
+        use_context: bool = True,
+        context_weight: float = 1.0,
+        gate_init: float = -1.0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.use_context = use_context
+        self.context_weight = context_weight
+        dim = self.fpn_channels
+        if use_context:
+            self.ctx5 = ContextFuse(dim)
+            self.ctx4 = ContextFuse(dim)
+            self.ctx3 = ContextFuse(dim)
+            self.ctx2 = ContextFuse(dim)
+            self.gate5 = nn.Parameter(torch.tensor(float(gate_init)))
+            self.gate4 = nn.Parameter(torch.tensor(float(gate_init)))
+            self.gate3 = nn.Parameter(torch.tensor(float(gate_init)))
+            self.gate2 = nn.Parameter(torch.tensor(float(gate_init)))
+
+    def extract_feats(
+        self, x1s: List[torch.Tensor], x2s: List[torch.Tensor]
+    ) -> List[torch.Tensor]:
+        """融合 change(diff) + context(绝对外观) 提取多尺度变化特征。"""
+        t1_p2, t1_p3, t1_p4, t1_p5 = x1s
+        t2_p2, t2_p3, t2_p4, t2_p5 = x2s
+
+        # 双向交叉注意力差异特征
+        diff_p5 = self.fuse5(t1_p5, t2_p5)
+        diff_p4 = self.fuse4(t1_p4, t2_p4)
+        diff_p3 = self.fuse3(t1_p3, t2_p3)
+        diff_p2 = self.fuse2(t1_p2, t2_p2)
+
+        # 上下文(绝对外观)特征，门控加权叠加，补足未变化类别的信号
+        if self.use_context:
+            cw = self.context_weight
+            diff_p5 = diff_p5 + torch.sigmoid(self.gate5) * cw * self.ctx5(t1_p5, t2_p5)
+            diff_p4 = diff_p4 + torch.sigmoid(self.gate4) * cw * self.ctx4(t1_p4, t2_p4)
+            diff_p3 = diff_p3 + torch.sigmoid(self.gate3) * cw * self.ctx3(t1_p3, t2_p3)
+            diff_p2 = diff_p2 + torch.sigmoid(self.gate2) * cw * self.ctx2(t1_p2, t2_p2)
+
+        # 自顶向下融合（与父类一致）
+        feat_p5 = self.tb5(diff_p5)
+        feat_p4 = self.p5_to_p4(feat_p5, diff_p4)
+        feat_p4 = self.tb4(feat_p4)
+        feat_p3 = self.p4_to_p3(feat_p4, diff_p3)
+        feat_p3 = self.tb3(feat_p3)
+        feat_p2 = self.p3_to_p2(feat_p3, diff_p2)
+        feat_p2 = self.tb2(feat_p2)
+
+        return [feat_p2, feat_p3, feat_p4, feat_p5]
