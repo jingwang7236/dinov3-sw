@@ -1,11 +1,19 @@
 # DFC2025 BRIGHT 前光后 SAR 变化检测 — 4 分类 + 512 滑窗 + TTA + Lovász
 # ============================================================================
-# 实验目的: 相比 dualmode_dinov3sarcnn_512x512_slide_tta_lovasz_40k_dfc2025bright.py 配置
+# 实验目的: 相比 dualmode_dino_olmoearth_512x512_slide_40k_dfc2025bright.py 配置
 #   ① backbone_opt 改为自研的dino模型
 #   ② backbone_sar 改为自研的olmoearth模型
 # ============================================================================
 _base_ = ['../_base_/default_runtime.py']
-
+# olmoearth_model_dir = "/mnt/ht2-nas2/00-model/00-wj/Codes/dinov3-sw/open-cd/olmoearth_pretrain-main/OlmoEarth-v1-Base"
+olmoearth_model_dir = "/mnt/qh2-nas3/00-model/00-wrs/zhejiang_earth_results/olmoearth10m_base/step23400"
+OlmoEarth_config_path = "{}/config.json".format(olmoearth_model_dir)
+OlmoEarth_weights_path = "{}/weights.pth".format(olmoearth_model_dir)
+# Dino_weights_path = "/mnt/ht2-nas2/00-model/00-common/weights/20260709/weights.pth"
+Dino_weights_path = "/mnt/qh2-nas3/00-model/00-limx/Dinov3/ckpt/stage2+stage3-zhejiang/23999.pth"
+Dino_weights_type = "self_trained"
+# Dino_weights_path = "/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"
+# Dino_weights_type = "official" # 'official' / 'self_trained' / 'auto'
 # ---------------------------------------------------------------------------
 # 数据集
 # ---------------------------------------------------------------------------
@@ -16,7 +24,7 @@ crop_size = (512, 512)
 data_prefix = dict(
     img_path_from='pre-event',
     img_path_to='post-event',
-    seg_map_path='target')
+    seg_map_path='target') 
 
 # ---------------------------------------------------------------------------
 # 模型
@@ -39,17 +47,24 @@ model = dict(
         type='DINOv3AdapterBackbone',
         out_channels=128,
         extract_ids=[5, 11, 17, 23],
-        dino_weight='/mnt/ht2-nas2/00-model/00-common/weights/20260709/weights.pth',
-        weights_type='self_trained',  # 'official' / 'self_trained' / 'auto'
-        # dino_weight='/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth',
+        dino_weight=Dino_weights_path,
+        weights_type=Dino_weights_type,  
         freeze_mode='frozen',
     ),
-    backbone_sar=dict(
-        type='SARCNNEncoder',
-        in_channels=3,
-        out_channels=128,
-        base_channels=32,
-        n_blocks=2,
+    backbone_sar = dict(
+        type='OlmoEarthSAREncoder',
+        model_dir=olmoearth_model_dir,
+        config_path=OlmoEarth_config_path,
+        weights_path=OlmoEarth_weights_path,
+        model_variant='base',  # 或 'large'，根据您下载的模型大小
+        patch_size=4,
+        image_size=512,
+        in_channels=3,  # SAR图像输入通道数
+        out_channels=128,  # 输出特征通道数
+        freeze_backbone=True,  # 是否冻结主干网络参数
+        adaptive_pool=False, # 关闭: SAR 自然多尺度输出已与 OPT 对齐
+        native_inference=True,
+        native_size=256,
     ),
     decode_head=dict(
         type='ChangeDinoCrossAttnDecoder',
@@ -100,7 +115,7 @@ test_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=16,
+    batch_size=8,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
