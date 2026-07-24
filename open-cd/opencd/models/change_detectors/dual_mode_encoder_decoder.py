@@ -43,6 +43,12 @@ class DualModeBranchEncoderDecoder(ChangeDinoEncoderDecoder):
         backbone_inchannels (int): 单张图像的通道数，默认 3。
         tta_flips (list, optional): TTA 翻转维度列表 (基于 [N,C,H,W] 的
             维度索引)。None=不使用 TTA, ``[3]``=水平翻转, ``[3,2]``=水平+垂直。
+        ms_inference (bool): 推理时是否做多尺度 logits 加权融合。默认 False
+            (仅用 p2, 行为不变, 向后兼容)。True 时把 p2/p3/p4/p5 各尺度
+            预测头输出上采样到同尺寸后按 ``ms_inference_weights`` 加权求和,
+            常可改善边界与小目标类别。
+        ms_inference_weights (list[float], optional): 各尺度 [p2,p3,p4,p5]
+            的融合权重。默认 [0.5,0.3,0.1,0.1]。
         **kwargs: 其他透传给父类的参数。
     """
 
@@ -53,6 +59,8 @@ class DualModeBranchEncoderDecoder(ChangeDinoEncoderDecoder):
                  refiner=None,
                  backbone_inchannels: int = 3,
                  tta_flips: Optional[List[int]] = None,
+                 ms_inference: bool = False,
+                 ms_inference_weights: Optional[List[float]] = None,
                  **kwargs):
         # 光学侧 backbone 作为父类的 self.backbone，复用全部既有逻辑
         super().__init__(
@@ -65,6 +73,9 @@ class DualModeBranchEncoderDecoder(ChangeDinoEncoderDecoder):
         self.backbone_sar = MODELS.build(backbone_sar)
         # TTA 配置
         self.tta_flips = tta_flips
+        # 多尺度推理融合 (默认关闭, 向后兼容)
+        self.ms_inference = ms_inference
+        self.ms_inference_weights = ms_inference_weights or [0.5, 0.3, 0.1, 0.1]
 
     def extract_feat(self, inputs: Tensor) -> Tuple[list, list]:
         """非对称双流特征提取。
@@ -98,16 +109,40 @@ class DualModeBranchEncoderDecoder(ChangeDinoEncoderDecoder):
         3. 应用 refiner（如有）。
         """
         feats1, feats2 = self.extract_feat(inputs)
-        # 直接取 p2 预测头输出，resize 到输入尺寸
+        # 直接取多尺度预测头输出, resize 到输入尺寸
         feats = self.decode_head.extract_feats(feats1, feats2)
-        seg_logits = self.decode_head.p2_head(feats[0])
-        if seg_logits.shape[-2:] != inputs.shape[-2:]:
-            seg_logits = F.interpolate(
-                seg_logits, size=inputs.shape[-2:], mode='bilinear',
-                align_corners=self.decode_head.align_corners)
+        if self.ms_inference:
+            seg_logits = self._ms_fuse(feats, inputs.shape[-2:])
+        else:
+            seg_logits = self.decode_head.p2_head(feats[0])
+            if seg_logits.shape[-2:] != inputs.shape[-2:]:
+                seg_logits = F.interpolate(
+                    seg_logits, size=inputs.shape[-2:], mode='bilinear',
+                    align_corners=self.decode_head.align_corners)
         if self.refiner is not None:
             seg_logits = self.refiner(seg_logits)
         return seg_logits
+
+    def _ms_fuse(self, feats: List[Tensor], target_size) -> Tensor:
+        """多尺度 logits 加权融合 (仅推理用).
+
+        将 p2/p3/p4/p5 各预测头输出 resize 到 ``target_size`` 后按
+        ``self.ms_inference_weights`` 加权求和, 通常可改善边界与小目标。
+        """
+        heads = [self.decode_head.p2_head, self.decode_head.p3_head,
+                 self.decode_head.p4_head, self.decode_head.p5_head]
+        weights = self.ms_inference_weights
+        align = self.decode_head.align_corners
+        out = None
+        for head, feat, w in zip(heads, feats, weights):
+            logit = head(feat)
+            if logit.shape[-2:] != target_size:
+                logit = F.interpolate(
+                    logit, size=target_size, mode='bilinear',
+                    align_corners=align)
+            term = logit * w
+            out = term if out is None else out + term
+        return out
 
     # ------------------------------------------------------------------
     # predict: 支持滑窗推理 + TTA

@@ -2,6 +2,8 @@
 # 基于 OlmoEarth 预训练模型的 SAR 图像编码器
 # 特性：支持任意输入尺寸，自适应池化对齐特征图，无 transformers 依赖
 
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -167,36 +169,42 @@ class OlmoEarthSAREncoder(nn.Module):
             self._freeze_backbone()
 
     def _load_pretrained_weights(self):
-        """从本地文件加载预训练权重"""
-        try:
-            # 读取配置
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
-            
-            # 加载权重
-            print(f"Loading weights from {self.weights_path}...")
-            state_dict = torch.load(self.weights_path, map_location='cpu')
-            
-            # --- 权重键名映射逻辑 ---
-            # 注意：OlmoEarth 的权重键名可能与此模型定义不一致。
-            # 此处提供了一个通用的加载框架，如果不匹配，需要根据实际的 state_dict 打印结果进行映射。
-            
-            model_state_dict = self.state_dict()
-            new_state_dict = {}
-            
-            # 简单的严格加载尝试
-            missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
-            
-            if missing_keys:
-                print(f"⚠️ Missing keys: {missing_keys[:5]}... (total {len(missing_keys)})")
-            if unexpected_keys:
-                print(f"⚠️ Unexpected keys (ignored): {unexpected_keys[:5]}... (total {len(unexpected_keys)})")
-                
-            print("✓ Weight loading process completed (check warnings above for issues).")
-            
-        except Exception as e:
-            print(f"✗ Error loading pretrained weights: {e}")
-            print("  Model will proceed with randomly initialized weights.")
+        """从本地文件加载预训练权重。
+
+        若权重文件或配置文件不存在，直接抛出异常终止训练，
+        避免在无感知的情况下使用随机初始化权重导致结果不准确。
+        """
+        # 校验权重文件与配置文件路径是否存在，缺失则终止训练
+        if not os.path.isfile(self.weights_path):
+            raise FileNotFoundError(
+                f"OlmoEarth weights file not found: {self.weights_path}. "
+                f"训练终止：请检查 OlmoEarth_weights_path 配置。")
+        if not os.path.isfile(self.config_path):
+            raise FileNotFoundError(
+                f"OlmoEarth config file not found: {self.config_path}. "
+                f"训练终止：请检查 OlmoEarth_config_path 配置。")
+
+        # 读取配置
+        with open(self.config_path, 'r') as f:
+            config = json.load(f)
+
+        # 加载权重
+        print(f"Loading weights from {self.weights_path}...")
+        state_dict = torch.load(self.weights_path, map_location='cpu')
+
+        # --- 权重键名映射逻辑 ---
+        # 注意：OlmoEarth 的权重键名可能与此模型定义不一致。
+        # 此处提供了一个通用的加载框架，如果不匹配，需要根据实际的 state_dict 打印结果进行映射。
+
+        # 简单的严格加载尝试
+        missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
+
+        if missing_keys:
+            print(f"⚠️ Missing keys: {missing_keys[:5]}... (total {len(missing_keys)})")
+        if unexpected_keys:
+            print(f"⚠️ Unexpected keys (ignored): {unexpected_keys[:5]}... (total {len(unexpected_keys)})")
+
+        print("✓ Weight loading process completed (check warnings above for issues).")
 
     def _freeze_backbone(self):
         """冻结主干网络参数"""
