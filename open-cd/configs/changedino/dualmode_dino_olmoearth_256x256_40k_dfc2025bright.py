@@ -52,11 +52,14 @@ model = dict(
         config_path=OlmoEarth_config_path,
         weights_path=OlmoEarth_weights_path,
         model_variant='base',  # 或 'large'，根据您下载的模型大小
-        patch_size=4,
-        image_size=256,
         in_channels=3,  # SAR图像输入通道数
         out_channels=128,  # 输出特征通道数
         freeze_backbone=True,  # 是否冻结主干网络参数
+        modality='sentinel1',
+        input_res=10,
+        default_month=0,
+        load_projection=True,
+        strict_load=True,
     ),
     decode_head=dict(
         type='ChangeDinoCrossAttnDecoder',

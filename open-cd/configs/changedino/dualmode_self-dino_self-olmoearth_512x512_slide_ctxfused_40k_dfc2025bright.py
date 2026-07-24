@@ -65,14 +65,17 @@ model = dict(
         config_path=OlmoEarth_config_path,
         weights_path=OlmoEarth_weights_path,
         model_variant='base',
-        patch_size=4,
-        image_size=512,
         in_channels=3,
         out_channels=128,
         freeze_backbone=True,           # backbone 冻结
         adaptive_pool=False,
         native_inference=True,
         native_size=256,
+        modality='sentinel1',
+        input_res=10,
+        default_month=0,
+        load_projection=True,
+        strict_load=True,
     ),
     decode_head=dict(
         # 关键改动: 叠加上下文(绝对外观)分支, 补足未变化类别(Intact)信号

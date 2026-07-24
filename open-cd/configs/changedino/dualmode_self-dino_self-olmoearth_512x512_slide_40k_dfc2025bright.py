@@ -7,7 +7,7 @@
 _base_ = ['../_base_/default_runtime.py']
 # olmoearth_model_dir = "/mnt/ht2-nas2/00-model/00-wj/Codes/dinov3-sw/open-cd/olmoearth_pretrain-main/OlmoEarth-v1-Base"
 olmoearth_model_dir = "/mnt/qh2-nas3/00-model/00-wrs/zhejiang_earth_results/olmoearth10m_base/step23400"
-OlmoEarth_config_path = "{}/config.json".format(olmoearth_model_dir)
+OlmoEarth_config_path = "{}/config.json".format(olmoearth_model_dir)   
 OlmoEarth_weights_path = "{}/weights.pth".format(olmoearth_model_dir)
 # Dino_weights_path = "/mnt/ht2-nas2/00-model/00-common/weights/20260709/weights.pth"
 Dino_weights_path = "/mnt/qh2-nas3/00-model/00-limx/Dinov3/ckpt/stage2+stage3-zhejiang/23999.pth"
@@ -57,14 +57,17 @@ model = dict(
         config_path=OlmoEarth_config_path,
         weights_path=OlmoEarth_weights_path,
         model_variant='base',  # 或 'large'，根据您下载的模型大小
-        patch_size=4,
-        image_size=512,
-        in_channels=3,  # SAR图像输入通道数
+        in_channels=3,  # SAR图像输入通道数 (BRIGHT 3通道)
         out_channels=128,  # 输出特征通道数
-        freeze_backbone=True,  # 是否冻结主干网络参数
-        adaptive_pool=False, # 关闭: SAR 自然多尺度输出已与 OPT 对齐
+        freeze_backbone=True,  # 冻结主干网络参数 (feature_extractor & input_adapter 仍可训练)
+        adaptive_pool=False, # 关闭: SAR 自然多尺度输出已与 OPT 分支对齐
         native_inference=True,
         native_size=256,
+        modality='sentinel1',      # 使用 sentinel1 模态 (两 checkpoint 均含), patch=8
+        input_res=10,              # sentinel1 原生 10m 分辨率 (用于 sincos 空间编码的 gsd_ratio)
+        default_month=0,           # BRIGHT 无时间戳, 固定月份编码
+        load_projection=True,      # 加载 project_and_aggregate 权重保持完整 (不参与 forward)
+        strict_load=True,          # 路径不存在/关键权重缺失则终止训练, 杜绝静默随机初始化
     ),
     decode_head=dict(
         type='ChangeDinoCrossAttnDecoder',

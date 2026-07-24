@@ -54,17 +54,20 @@ model = dict(
         config_path=OlmoEarth_config_path,
         weights_path=OlmoEarth_weights_path,
         model_variant='base',  # 或 'large'，根据您下载的模型大小
-        patch_size=4,
-        image_size=512,
-        in_channels=3,  # SAR图像输入通道数
+        in_channels=3,  # SAR图像输入通道数 (BRIGHT 3通道)
         out_channels=128,  # 输出特征通道数
-        freeze_backbone=True,  # 是否冻结主干网络参数
-        adaptive_pool=False, # 关闭: SAR 自然多尺度输出已与 OPT 对齐
+        freeze_backbone=True,  # 冻结主干网络参数 (feature_extractor & input_adapter 仍可训练)
+        adaptive_pool=False, # 关闭: SAR 自然多尺度输出已与 OPT 分支对齐
         # 关键: 内部把 SAR 下采样到 256 再过 ViT, 避免 512 下 16k-token 全局注意力
         # 算力/显存暴涨导致的"卡住"(GPU 100% 但无 iter 输出)。
         # ViT 在原生 256 上编码后, 输出特征再上采样回 512 对应的多尺度尺寸。
         native_inference=True,
         native_size=256,
+        modality='sentinel1',      # 使用 sentinel1 模态, patch=8
+        input_res=10,              # sentinel1 原生 10m 分辨率 (用于 sincos 空间编码)
+        default_month=0,           # BRIGHT 无时间戳, 固定月份编码
+        load_projection=True,
+        strict_load=True,          # 路径不存在/关键权重缺失则终止训练
     ),
     decode_head=dict(
         type='ChangeDinoCrossAttnDecoder',
