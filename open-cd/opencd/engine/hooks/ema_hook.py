@@ -54,6 +54,11 @@ class EMAHook(Hook):
         self._backup = None          # dict[name -> tensor]
         self._ema_enabled = False
         self._swapped = False        # 当前是否已换入 EMA 权重(防重复换入)
+        # 影子是否已被训练步填充。纯推理/评测(如 tools/test.py)时 before_run 会用
+        # "刚构建、未训练"的模型初始化影子, 此时绝不能把这份随机影子换入覆盖
+        # checkpoint, 否则 test 会跑在未训练权重上。只有发生至少一次
+        # after_train_iter 更新后, 影子才被视为有效。
+        self._shadow_populated = False
         self.logger = logging.getLogger('mmengine')
 
     # ------------------------------------------------------------------
@@ -110,10 +115,20 @@ class EMAHook(Hook):
                     self._shadow[name] = t.detach().clone()
                     continue
                 self._shadow[name].mul_(1.0 - m).add_(t.detach(), alpha=m)
+        # 至少经过一次训练更新后, 影子才被视为有效(可参与评测换入)
+        self._shadow_populated = True
 
     # ---- 评测前: 换入 EMA 权重 ----
     def _swap_in(self, runner):
         if not self._ema_enabled:
+            return
+        # 影子尚未被训练步填充(如纯推理 tools/test.py / 纯 val 未训练)时,
+        # 影子里只是 "刚构建的随机/预训练权重", 换入会覆盖已加载的 checkpoint,
+        # 导致评测跑在未训练权重上。此时跳过换入, 直接用模型当前(checkpoint)权重。
+        if not self._shadow_populated:
+            self.logger.info(
+                '[EMAHook] EMA shadow not populated yet (no training step); '
+                'skip swap-in, evaluate with current model weights.')
             return
         if self._swapped:
             return  # 已换入, 避免重复覆盖 backup
