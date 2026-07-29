@@ -13,8 +13,11 @@ from .whu_cd import WHU_CD_Dataset
 from .jl1_cd import JL1_CD_Dataset
 from .sysu_cd import SYSU_CD_Dataset
 from .dfc2025_bright_dataset import DFC2025BRIGHTDataset
+from .cau_flood_dataset import CAUFloodDataset
 
 __all__ = ['_BaseCDDataset', 'BaseSCDDataset', 'LEVIR_CD_Dataset', 'S2Looking_Dataset', 
            'SVCD_Dataset', 'RSIPAC_CD_Dataset', 'CLCD_Dataset', 'DSIFN_Dataset', 
            'SECOND_Dataset', 'Landsat_Dataset', 'BANDON_Dataset', 'WHU_CD_Dataset',
-           'JL1_CD_Dataset', 'SYSU_CD_Dataset', 'DFC2025BRIGHTDataset']
+           'JL1_CD_Dataset', 'SYSU_CD_Dataset', 'DFC2025BRIGHTDataset',
+           'CAUFloodDataset',
+           ]

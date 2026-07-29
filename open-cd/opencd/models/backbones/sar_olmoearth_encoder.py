@@ -469,8 +469,12 @@ class OlmoEarthSAREncoder(nn.Module):
             feats[2] = self.adapt_p4(feats[2])
             feats[3] = self.adapt_p5(feats[3])
 
-        # 8. native_inference: 把特征上采样回原始输入对应的多尺度尺寸
-        if self.native_inference and (H_in != self.native_size or W_in != self.native_size):
+        # 8. 对齐到标准多尺度尺寸 [H/4, H/8, H/16, H/32], 与光学分支 (DINOv3
+        #    Adapter, strides [4,8,16,32]) 保持一致。feature_extractor 实际输出
+        #    按 token 网格池化 (patch_size=8 时为 strides [8,16,32,64]), 即便
+        #    输入等于 native_size 也必须 resize, 否则双分支尺度不匹配会导致
+        #    CrossAttnFusion 等融合模块在窗口切分时崩溃。
+        if self.native_inference:
             strides = [4, 8, 16, 32]
             for i, s in enumerate(strides):
                 tgt = (H_in // s, W_in // s)
