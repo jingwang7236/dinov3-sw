@@ -6,6 +6,8 @@ import re
 import os
 import sys
 import contextlib
+import logging
+from collections import OrderedDict
 sys.path.insert(0, "/mnt/ht2-nas2/00-model/00-wj/Codes/dinov3-sw/open-cd")
 
 
@@ -21,6 +23,111 @@ MODEL_TO_NUM_LAYERS = {
     "VIT7B": 40,
 }
 
+logger = logging.getLogger(__name__)
+
+
+def _is_official_dino_weights(weights):
+    """判断 weights 路径是否为官方 DINOv3 权重（文件名含 -XXXXXXXX.pth 哈希）。"""
+    if not isinstance(weights, str):
+        return True
+    pattern = r"-(.{8})\.pth$"
+    return re.search(pattern, os.path.basename(weights)) is not None
+
+
+def _clean_self_state_dict(state):
+    """参考 load_checkpoint_forward.py 清理自研 checkpoint 的 key 前缀。"""
+    cleaned = OrderedDict()
+    for k, v in state.items():
+        new_k = k
+        for prefix in [
+            "model.student.",
+            "model.teacher.",
+            "module.student.",
+            "module.teacher.",
+            "student.",
+            "teacher.",
+            "model.",
+            "module.",
+            "backbone.",
+        ]:
+            if new_k.startswith(prefix):
+                new_k = new_k[len(prefix):]
+                break
+        new_k = new_k.replace("_orig_mod.", "")
+        new_k = new_k.replace("_checkpoint_wrapped_module.", "")
+        cleaned[new_k] = v
+    return cleaned
+
+
+def _extract_self_dino_state_dict(ckpt):
+    """从自研 checkpoint 中提取 ViT 主干的 state_dict。"""
+    if isinstance(ckpt, dict):
+        for key in ("model", "state_dict", "student", "teacher"):
+            if key in ckpt and isinstance(ckpt[key], dict):
+                logger.info(f"Using ckpt['{key}'] ({len(ckpt[key])} keys)")
+                return ckpt[key]
+        has_tensors = any(isinstance(v, torch.Tensor) for v in ckpt.values())
+        if has_tensors:
+            state = {k: v for k, v in ckpt.items() if isinstance(v, torch.Tensor)}
+            logger.info(f"Using top-level dict as state_dict ({len(state)} tensor keys)")
+            return state
+    return ckpt
+
+
+def _build_self_trained_dinov3(weights_path, untie_global_and_local_cls_norm=None):
+    """构建无预训练权重的 ViT-L，并加载自研权重 (strict=False)。
+
+    参考 DINOv3AdapterBackbone 的 self_trained 分支实现，保持架构一致。
+    """
+    logger.info(f"Loading self-trained DINOv3 weights from: {weights_path}")
+    ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
+    raw_state = _extract_self_dino_state_dict(ckpt)
+    cleaned = _clean_self_state_dict(raw_state)
+
+    untie = untie_global_and_local_cls_norm
+    if untie is None:
+        untie = any("cls_norm" in k for k in cleaned.keys())
+        logger.info(
+            f"Auto-inferred untie_global_and_local_cls_norm={untie} "
+            f"from checkpoint keys"
+        )
+
+    from dinov3.hub.backbones import _make_dinov3_vit
+    model = _make_dinov3_vit(
+        img_size=224,
+        patch_size=16,
+        in_chans=3,
+        pos_embed_rope_base=100,
+        pos_embed_rope_normalize_coords="separate",
+        pos_embed_rope_rescale_coords=2,
+        pos_embed_rope_dtype="fp32",
+        embed_dim=1024,
+        depth=24,
+        num_heads=16,
+        ffn_ratio=4,
+        qkv_bias=True,
+        drop_path_rate=0.0,
+        layerscale_init=1.0e-05,
+        norm_layer="layernormbf16",
+        ffn_layer="mlp",
+        ffn_bias=True,
+        proj_bias=True,
+        n_storage_tokens=4,
+        mask_k_bias=True,
+        untie_global_and_local_cls_norm=untie,
+        pretrained=False,
+        compact_arch_name="vitl",
+    )
+    msg = model.load_state_dict(cleaned, strict=False)
+    matched = len(cleaned) - len(msg.unexpected_keys)
+    logger.info(
+        f"Loaded self-trained DINOv3 weights: matched={matched}, "
+        f"missing={len(msg.missing_keys)}, unexpected={len(msg.unexpected_keys)}"
+    )
+    if msg.missing_keys:
+        logger.warning(f"Missing keys (first 10): {msg.missing_keys[:10]}")
+    return model
+
 class DINOV3Wrapper(nn.Module):
     """
     DINOv3 特征提取器包装类，支持灵活的权重训练策略。
@@ -34,6 +141,10 @@ class DINOV3Wrapper(nn.Module):
             - 'unfreeze_last_n': 解冻最后 N 层
             - 'full_finetune': 全量微调
         unfreeze_layers (int): 当 freeze_mode='unfreeze_last_n' 时，解冻的层数
+        weights_type (str): 权重类型，决定加载方式:
+            - 'auto' (默认): 根据文件名自动判断（含 -XXXXXXXX.pth 哈希视为官方）。
+            - 'official': 官方 DINOv3 权重，走 torch.hub.load 标准流程。
+            - 'self_trained': 自研权重，先构建无预训练 ViT 再 strict=False 加载。
         verbose (bool): 是否打印详细信息
     """
     def __init__(
@@ -43,18 +154,42 @@ class DINOV3Wrapper(nn.Module):
         device="cuda",
         freeze_mode: str = "frozen",  # 'frozen', 'unfreeze_last_n', 'full_finetune'
         unfreeze_layers: int = 2,
+        weights_type: str = "auto",
+        untie_global_and_local_cls_norm=None,
     ):
         super().__init__()
         self.device = device
         self.freeze_mode = freeze_mode
         self.unfreeze_layers = unfreeze_layers
-        self.model = torch.hub.load(
-            REPO_DIR,
-            DINO_NAME,
-            source="local",
-            weights=weights_path,
-        )
-        
+
+        # 解析 weights_type：'auto' 时按文件名自动判断
+        if weights_type == "auto":
+            is_self_trained = not _is_official_dino_weights(weights_path)
+        elif weights_type == "official":
+            is_self_trained = False
+        elif weights_type == "self_trained":
+            is_self_trained = True
+        else:
+            raise ValueError(
+                f"Unknown weights_type: '{weights_type}', expected one of "
+                f"['auto', 'official', 'self_trained']"
+            )
+
+        if not is_self_trained:
+            # 官方权重：走 torch.hub.load 的标准下载/加载流程
+            self.model = torch.hub.load(
+                REPO_DIR,
+                DINO_NAME,
+                source="local",
+                weights=weights_path,
+            )
+        else:
+            # 自研权重：先构建无预训练 ViT，再 strict=False 加载
+            self.model = _build_self_trained_dinov3(
+                weights_path,
+                untie_global_and_local_cls_norm=untie_global_and_local_cls_norm,
+            )
+
         self.model = self.model.eval().to(device)
         self.n_layers = MODEL_TO_NUM_LAYERS[
             re.sub(r"\d+", "", DINO_NAME.split("_")[-1]).upper()
@@ -117,7 +252,19 @@ class DINOV3Wrapper(nn.Module):
                 param.requires_grad = True
         
         print(f"🔓 DINOv3: Unfrozen last {n} layers (blocks {start_idx}-{total_blocks-1})")
-    
+
+    def set_freeze_mode(self, mode="frozen", n=0):
+        """动态切换冻结模式 (兼容 FreezeScheduleHook 调用签名)。
+
+        Args:
+            mode (str): 'frozen' / 'unfreeze_last_n' / 'full_finetune'
+            n (int): mode='unfreeze_last_n' 时解冻的层数
+        """
+        self.freeze_mode = mode
+        if mode == "unfreeze_last_n":
+            self.unfreeze_layers = n
+        self._apply_freeze_strategy()
+
     def forward(self, x):
         scale_factor = 2 / (512 / x.shape[-1])
         x = F.interpolate(

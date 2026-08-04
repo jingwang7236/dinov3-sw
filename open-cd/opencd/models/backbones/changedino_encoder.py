@@ -31,6 +31,7 @@ class ChangeDinoEncoder(nn.Module):
         gamma_mode="SE",
         beta_mode="contextgatedconv",
         dino_weight="/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth",
+        weights_type="auto",
         device="cuda",
         extract_ids=[5, 11, 17, 23],
         **kwargs,
@@ -47,7 +48,10 @@ class ChangeDinoEncoder(nn.Module):
         )
         dense_out_dim = fpn_channels * 2
         self.dino = DINOV3Wrapper(
-            weights_path=dino_weight, device=device, extract_ids=extract_ids
+            weights_path=dino_weight,
+            device=device,
+            extract_ids=extract_ids,
+            weights_type=weights_type,
         )
         self.dense_adp = DenseAdapterLite(
             in_dim=1024, out_dim=dense_out_dim, bottleneck=fpn_channels // 2
@@ -76,6 +80,13 @@ class ChangeDinoEncoder(nn.Module):
         fea = self.pff(fea, ds_fea)
 
         return fea
+
+    def set_freeze_mode(self, mode="frozen", n=0):
+        """动态切换 DINO 分支冻结模式 (兼容 FreezeScheduleHook)。
+
+        仅作用于 self.dino (DINOV3Wrapper)，CNN 主干 / FPN / adapter 始终可训练。
+        """
+        self.dino.set_freeze_mode(mode=mode, n=n)
 
 @MODELS.register_module()
 class ChangeDinoEncoderOnlyDino(nn.Module):
