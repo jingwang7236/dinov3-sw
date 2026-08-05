@@ -9,6 +9,7 @@ _base_ = [
     '../common/standard_256x256_40k_sysucd.py']
 Dino_weights_path = "/mnt/qh2-nas3/00-model/00-wrs/zhejiang_earth_results/zhejiang_DinoViT_large_Olmoearth10m_128gpu_stage2_stage3_no_cl_gram_nofusion/4999_new.pt"
 Dino_weights_type = "self_trained"
+Mobilenet_weights_path = "/mnt/ht2-nas2/00-model/00-wj/Codes/checkpoints/mobilenet_v2_imagenet.pth"
 crop_size = (256, 256)
 # model settings
 norm_cfg = dict(type='SyncBN', requires_grad=True)
@@ -32,6 +33,7 @@ model = dict(
         dino_weight=Dino_weights_path,  # 自研权重
         weights_type=Dino_weights_type,  # 'official' / 'self_trained' / 'auto'
         freeze_mode='frozen',  # 全程冻结 DINO 分支
+        mobilenet_pretrained=Mobilenet_weights_path,  # ImageNet 预训练权重
     ),
     decode_head=dict(
         type='ChangeDinoDecoder',
@@ -58,7 +60,7 @@ model = dict(
 
 
 train_dataloader = dict(
-    batch_size=12,
+    batch_size=36,
 )
 val_dataloader = dict(
     batch_size=1,

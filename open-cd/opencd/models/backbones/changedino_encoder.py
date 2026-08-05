@@ -1,5 +1,6 @@
 import timm 
 
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,9 +10,24 @@ from opencd.models.blocks import mobilenet_v2, FPN, DINOV3Wrapper, DenseAdapterL
 from opencd.registry import MODELS
 
 
-def get_backbone(backbone_name):
+def get_backbone(backbone_name, mobilenet_pretrained=None):
     if backbone_name == "mobilenetv2":
         backbone = mobilenet_v2(pretrained=False, progress=True)
+        if mobilenet_pretrained:
+            if os.path.isfile(mobilenet_pretrained):
+                state_dict = torch.load(
+                    mobilenet_pretrained, map_location="cpu")
+                msg = backbone.load_state_dict(state_dict, strict=False)
+                print(f"loading local imagenet pretrained mobilenetv2: "
+                      f"{mobilenet_pretrained} "
+                      f"(missing={len(msg.missing_keys)}, "
+                      f"unexpected={len(msg.unexpected_keys)})")
+            else:
+                print(f"[WARNING] mobilenet_v2 ImageNet weights not found at "
+                      f"{mobilenet_pretrained}; using random init.")
+        else:
+            print("[WARNING] mobilenet_pretrained not set; "
+                  "mobilenetv2 uses random init.")
         backbone.channels = [16, 24, 32, 96, 320]
     elif backbone_name == "resnet18d":
         backbone = timm.create_model("resnet18d", pretrained=False, features_only=True)
@@ -34,11 +50,12 @@ class ChangeDinoEncoder(nn.Module):
         weights_type="auto",
         device="cuda",
         extract_ids=[5, 11, 17, 23],
+        mobilenet_pretrained=None,
         **kwargs,
     ):
         super().__init__()
         self.backbone_name = backbone
-        self.backbone = get_backbone(backbone)
+        self.backbone = get_backbone(backbone, mobilenet_pretrained)
         self.fpn = FPN(
             in_channels=self.backbone.channels[-4:],
             out_channels=fpn_channels,
