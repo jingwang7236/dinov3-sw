@@ -20,6 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as cp
 
 from opencd.registry import MODELS
 
@@ -183,7 +184,8 @@ class OlmoEarthSAREncoder(nn.Module):
                  input_res=10,
                  default_month=0,
                  load_projection=True,
-                 strict_load=True):
+                 strict_load=True,
+                 use_checkpoint=False):
         super().__init__()
         self.model_dir = model_dir
         self.config_path = config_path
@@ -197,6 +199,7 @@ class OlmoEarthSAREncoder(nn.Module):
         self.native_size = native_size
         self.out_channels = out_channels
         self.strict_load = strict_load
+        self.use_checkpoint = use_checkpoint
 
         if model_variant == 'base':
             embed_dim, depth, num_heads = 768, 12, 12
@@ -454,7 +457,10 @@ class OlmoEarthSAREncoder(nn.Module):
 
         # 4. transformer blocks
         for blk in self.blocks:
-            tokens = blk(tokens)
+            if self.use_checkpoint and self.training:
+                tokens = cp.checkpoint(blk, tokens, use_reentrant=False)
+            else:
+                tokens = blk(tokens)
 
         # 5. final norm
         tokens = self.norm(tokens)
