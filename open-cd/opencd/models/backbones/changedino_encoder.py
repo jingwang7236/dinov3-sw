@@ -51,6 +51,8 @@ class ChangeDinoEncoder(nn.Module):
         device="cuda",
         extract_ids=[5, 11, 17, 23],
         mobilenet_pretrained=None,
+        freeze_mode="frozen",
+        unfreeze_last_n=0,
         **kwargs,
     ):
         super().__init__()
@@ -69,6 +71,8 @@ class ChangeDinoEncoder(nn.Module):
             device=device,
             extract_ids=extract_ids,
             weights_type=weights_type,
+            freeze_mode=freeze_mode,
+            unfreeze_layers=unfreeze_last_n,
         )
         self.dense_adp = DenseAdapterLite(
             in_dim=1024, out_dim=dense_out_dim, bottleneck=fpn_channels // 2

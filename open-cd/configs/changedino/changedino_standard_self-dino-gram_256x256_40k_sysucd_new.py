@@ -1,9 +1,10 @@
-# ChangeDino + DINOv3Backbone (SYSU-CD) — 自研权重 + 全程冻结 ViT 主干, 40k
+# ChangeDino + DINOv3Backbone (SYSU-CD) — 自研权重 + 两阶段冻结, 40k
 # ============================================================================
-# 基于 changedino_standard_self-dino-gram_256x256_40k_sysucd.py 的对照实验。
-# 区别: DINO 分支全程冻结，仅训练 CNN/FPN/adapter/decoder/refiner，不进行
-#       两阶段解冻微调，作为消融对照 (freeze baseline)。
-# 保留 Trick: Focal+Lovász 损失 / EMA / SoftMorph refiner。
+# 基于 changedino_standard_256x256_40k_sysucd.py 版本替换自研权重，对比效果。
+# 训练策略 (通过 FreezeScheduleHook):
+#   阶段1 (0 ~ 20k iters):     DINO 分支 frozen，仅训练 CNN/FPN/adapter/decoder
+#   阶段2 (20k ~ 40k iters):   解冻 DINO 最后 2 层 transformer block 微调
+# 新增 Trick: Focal+Lovász 损失 / SoftMorph refiner。
 # ============================================================================
 _base_ = [
     '../common/standard_256x256_40k_sysucd.py']
@@ -31,8 +32,6 @@ model = dict(
         fpn_channels=128,
         extract_ids=[5, 11, 17, 23],
         dino_weight=Dino_weights_path,  # 自研权重
-        weights_type=Dino_weights_type,  # 'official' / 'self_trained' / 'auto'
-        freeze_mode='frozen',  # 全程冻结 DINO 分支
         mobilenet_pretrained=Mobilenet_weights_path,  # ImageNet 预训练权重
     ),
     decode_head=dict(
@@ -86,14 +85,22 @@ val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
 # ============================================================================
-# 单阶段学习率调度 (ViT 全程冻结):
-#   0 ~ 3k:    线性预热
-#   3k ~ 40k:  余弦退火到 eta_min
+# 两阶段学习率调度 (配合 FreezeScheduleHook):
+#   阶段1 (0 ~ 3k):     线性预热
+#   阶段1 (3k ~ 20k):   余弦退火
+#   阶段2 (20k ~ 23k):  重新预热（新解冻的 ViT 后2层需小学习率起步）
+#   阶段2 (23k ~ 40k):  余弦退火
 # ============================================================================
 param_scheduler = [
+    # 阶段1: 预热 + 余弦退火
     dict(type='LinearLR', start_factor=1e-5, by_epoch=False, begin=0, end=3000),
-    dict(type='CosineAnnealingLR', T_max=37000, eta_min=1e-6,
-         by_epoch=False, begin=3000, end=40000),
+    dict(type='CosineAnnealingLR', T_max=17000, eta_min=1e-6,
+         by_epoch=False, begin=3000, end=20000),
+    # 阶段2: 重新预热 + 余弦退火 (lr 降至 1/10 适配微调)
+    dict(type='LinearLR', start_factor=0.1, end_factor=1.0,
+         by_epoch=False, begin=20000, end=23000),
+    dict(type='CosineAnnealingLR', T_max=17000, eta_min=1e-7,
+         by_epoch=False, begin=23000, end=40000),
 ]
 
 # checkpoint 保留 best + 最近 5 个
@@ -102,8 +109,22 @@ default_hooks = dict(
                     save_best='mIoU', max_keep_ckpts=5))
 
 # ============================================================================
-# Trick: EMA 权重平滑 (val/test 自动换入 EMA 权重评估)
+# Trick: FreezeScheduleHook 两阶段冻结调度
+#   阶段1 (0 ~ 20k iters):     DINO 分支完全 frozen，仅训练 CNN/FPN/adapter/decoder
+#   阶段2 (20k ~ 40k iters):   解冻 DINO 最后 2 层 transformer block 微调
 # ============================================================================
 custom_hooks = [
-    dict(type='EMAHook', momentum=2e-4, update_buffers=True, priority='LOWEST'),
+    dict(
+        type='FreezeScheduleHook',
+        backbone_attr='backbone',
+        schedule=[
+            # 阶段1: 前半段冻结 DINO 分支
+            dict(iter=0, freeze_mode='frozen'),
+            # 阶段2: 后半段解冻最后 2 层微调
+            #   可选 load_from 加载阶段1 best checkpoint (glob 自动匹配)
+            dict(iter=20000, freeze_mode='unfreeze_last_n',
+                 unfreeze_last_n=2),
+        ],
+        verbose=True,
+    ),
 ]

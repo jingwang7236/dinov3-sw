@@ -39,6 +39,9 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
         backbone: dict,
         decode_head: dict,
         refiner: Optional[dict] = None,
+        ms_inference: bool = False,
+        ms_inference_weights: Optional[List[float]] = None,
+        tta_flips: Optional[List[int]] = None,
         **kwargs,
     ):
         self.refiner_cfg = refiner
@@ -46,6 +49,60 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
 
         # 初始化 Refiner
         self.refiner = MODELS.build(self.refiner_cfg) if self.refiner_cfg else None
+        # 推理 trick: 多尺度 logits 加权融合 + TTA 翻转
+        self.ms_inference = ms_inference
+        self.ms_inference_weights = ms_inference_weights or [0.5, 0.3, 0.1, 0.1]
+        self.tta_flips = tta_flips
+
+    # ------------------------------------------------------------------
+    # encode_decode: 双时相编码解码, 输出与输入同分辨率的 logits
+    # 供 slide_inference / whole_inference (来自 SiamEncoderDecoder) 调用
+    # ------------------------------------------------------------------
+    def encode_decode(self, inputs: Tensor,
+                      batch_img_metas: List[dict]) -> Tensor:
+        """双时相编码解码, resize 到输入尺寸 (非 ori_shape)。
+
+        与父类 SiamEncoderDecoder.encode_decode 不同: 本类的 extract_feat 返回
+        (feats1, feats2) 双时相, 且需支持 ms_inference + refiner。
+        """
+        feats1, feats2 = self.extract_feat(inputs)
+        feats = self.decode_head.extract_feats(feats1, feats2)
+        if self.ms_inference:
+            seg_logits = self._ms_fuse(feats, inputs.shape[-2:])
+        else:
+            seg_logits = self.decode_head.p2_head(feats[0])
+            if seg_logits.shape[-2:] != inputs.shape[-2:]:
+                seg_logits = F.interpolate(
+                    seg_logits, size=inputs.shape[-2:], mode='bilinear',
+                    align_corners=self.decode_head.align_corners)
+        if self.refiner is not None:
+            seg_logits = self.refiner(seg_logits)
+        return seg_logits
+
+    def _ms_fuse(self, feats: List[Tensor], target_size) -> Tensor:
+        """多尺度 logits 加权融合 (仅推理用)."""
+        heads = [self.decode_head.p2_head, self.decode_head.p3_head,
+                 self.decode_head.p4_head, self.decode_head.p5_head]
+        weights = self.ms_inference_weights
+        align = self.decode_head.align_corners
+        out = None
+        for head, feat, w in zip(heads, feats, weights):
+            logit = head(feat)
+            if logit.shape[-2:] != target_size:
+                logit = F.interpolate(
+                    logit, size=target_size, mode='bilinear', align_corners=align)
+            term = logit * w
+            out = term if out is None else out + term
+        return out
+
+    def inference(self, inputs: Tensor, batch_img_metas: List[dict]) -> Tensor:
+        """slide/whole 推理入口 (复用 SiamEncoderDecoder 的实现)."""
+        assert self.test_cfg.mode in ['slide', 'whole']
+        ori_shape = batch_img_metas[0]['ori_shape']
+        assert all(_['ori_shape'] == ori_shape for _ in batch_img_metas)
+        if self.test_cfg.mode == 'slide':
+            return self.slide_inference(inputs, batch_img_metas)
+        return self.whole_inference(inputs, batch_img_metas)
 
     # ------------------------------------------------------------------
     # extract_feat: 拆分双时相输入，分别提取特征
@@ -136,7 +193,7 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
     # predict: 推理预测，委托给 decode_head.predict + refiner
     # ------------------------------------------------------------------
     def predict(self, inputs: Tensor, data_samples: List) -> List:
-        """推理预测。
+        """推理预测, 支持滑窗 (slide)/整图 (whole) + TTA 翻转。
 
         Args:
             inputs: 输入张量
@@ -159,17 +216,20 @@ class ChangeDinoEncoderDecoder(SiamEncoderDecoder):
                 )
             ] * inputs.shape[0]
 
-        # 1. 提取特征
-        feats1, feats2 = self.extract_feat(inputs)
+        # 1. 原始输入推理 (走 inference -> encode_decode, 支持 ms_inference/refiner)
+        seg_logits = self.inference(inputs, batch_img_metas)
 
-        # 2. Decoder 预测 -> seg_logits (N, C, H, W)
-        seg_logits = self.decode_head.predict(feats1, feats2, batch_img_metas)
+        # 2. TTA: 翻转增强 (翻转 -> 推理 -> 翻回 -> 累加 -> 取平均)
+        if self.tta_flips:
+            for flip_dim in self.tta_flips:
+                flipped_inputs = torch.flip(inputs, dims=[flip_dim])
+                flipped_logits = self.inference(
+                    flipped_inputs, batch_img_metas)
+                seg_logits = seg_logits + torch.flip(
+                    flipped_logits, dims=[flip_dim])
+            seg_logits = seg_logits / (1 + len(self.tta_flips))
 
-        # 3. 应用 Refiner
-        if self.refiner is not None:
-            seg_logits = self.refiner(seg_logits)
-
-        # 4. 后处理
+        # 3. 后处理
         return self.postprocess_result(seg_logits, data_samples)
 
     # ------------------------------------------------------------------

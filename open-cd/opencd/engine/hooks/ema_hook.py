@@ -45,15 +45,22 @@ class EMAHook(Hook):
     def __init__(self,
                  momentum: float = 1e-4,
                  update_buffers: bool = True,
-                 valid_interval: int = 0):
+                 valid_interval: int = 0,
+                 ema_start_iter: int = 0):
         super().__init__()
         self.momentum = momentum
         self.update_buffers = update_buffers
         self.valid_interval = valid_interval
+        # EMA 延迟启动: 训练前 ema_start_iter 步不初始化/不更新影子, 此时 val/test
+        # 直接用真实权重 (见 _swap_in 的 _shadow_populated 守卫); 到达该 iter 后才用
+        # "当前已训练权重" 初始化影子并开始 EMA, 避免把 warmup 期欠训练的随机预测
+        # 链路权重平均进影子, 导致早期 val 塌缩到多数类。
+        self.ema_start_iter = ema_start_iter
         self._shadow = None          # dict[name -> tensor]
         self._backup = None          # dict[name -> tensor]
         self._ema_enabled = False
         self._swapped = False        # 当前是否已换入 EMA 权重(防重复换入)
+        self._shadow_initialized = False   # 影子是否已(延迟)初始化
         # 影子是否已被训练步填充。纯推理/评测(如 tools/test.py)时 before_run 会用
         # "刚构建、未训练"的模型初始化影子, 此时绝不能把这份随机影子换入覆盖
         # checkpoint, 否则 test 会跑在未训练权重上。只有发生至少一次
@@ -100,14 +107,34 @@ class EMAHook(Hook):
             self.logger.info('[EMAHook] No trainable params, EMA disabled.')
             self._ema_enabled = False
             return
-        self._init_shadow(model)
         self._ema_enabled = True
+        # 延迟启动: 若当前已超过 ema_start_iter (如 resume 训练), 立即初始化影子;
+        # 否则推迟到 after_train_iter 中到达 ema_start_iter 时再初始化。
+        if runner.iter >= self.ema_start_iter:
+            self._init_shadow(model)
+            self._shadow_initialized = True
+        else:
+            self.logger.info(
+                f'[EMAHook] EMA deferred: ema_start_iter={self.ema_start_iter}, '
+                f'current iter={runner.iter}. Before that, val/test use the '
+                f'real (non-EMA) weights.')
 
     def after_train_iter(self, runner, batch_idx, data_batch=None,
                          outputs=None) -> None:
         if not self._ema_enabled:
             return
+        # 延迟启动: 未到 ema_start_iter 时不做任何 EMA
+        if runner.iter < self.ema_start_iter:
+            return
         model = self._unwrap(runner.model)
+        # 到达 ema_start_iter 时, 用当前已训练权重初始化影子 (而非随机/初始权重),
+        # 从源头避免把 warmup 期的欠训练权重平均进影子。
+        if not self._shadow_initialized:
+            self._init_shadow(model)
+            self._shadow_initialized = True
+            self.logger.info(
+                f'[EMAHook] iter={runner.iter}: EMA started, shadow '
+                f'initialized from current (trained) weights.')
         m = self.momentum
         with torch.no_grad():
             for name, t in self._named_tensors(model):
