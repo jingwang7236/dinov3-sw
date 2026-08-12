@@ -1,15 +1,24 @@
-# DFC2025 BRIGHT 前光后 SAR 变化检测 — 4 分类 + 多 trick (双 backbone 全冻结, 显存友好)
+# DFC2025 BRIGHT 前光后 SAR 变化检测 — 4 分类 + 两阶段微调 (解冻双 backbone 最后 2 层)
 # ============================================================================
-# 本版改进 (提高有效分辨率以提 IoU):
-#   - 光学 DINOv3 (RoPE) 原生支持任意分辨率, crop 保持 512 即可拿到细特征;
-#   - 关键瓶颈在 SAR: OlmoEarth 原本 native_size=256 会把任意输入先下采样到
-#     256 再过 ViT, 空间细节丢失。本版 native_size=256->384, 让 SAR ViT 真正
-#     编码更细分辨率, 与光学分支细节对齐 (此前仅提 crop 不提 native 实测 test
-#     mIoU 不升反降 67.09->66.74)。
-#   - 显存控制: OlmoEarth 开 use_checkpoint (梯度检查点, transformer block 重算)
-#     + train batch_size 8->4, 适配 native 384 (token 1024->2304, attn O(N^2))。
-#   - 推理 stride 已是 (256,256) 50% 重叠, 改善边界。
-# 其它 trick 同基线: 双 backbone 全冻结 / EMA / ms_inference+TTA / Lovász+Focal / 80k。
+# 基于 *_optim.py, 在保留 native_size=384 / 双 backbone 初始冻结 / EMA /
+# ms_inference+TTA / Lovász+Focal / 80k 的前提下, 通过 FreezeScheduleHook
+# 进行两阶段训练:
+#   阶段1 (0 ~ 40k iters):   双 backbone 完全冻结, 仅训练 adapter/decoder/
+#                            feature_extractor/input_adapter (与 _optim 一致)
+#   阶段2 (40k ~ 80k iters): 解冻 DINOv3 ViT 与 OlmoEarth SAR ViT 各最后 2 个
+#                            transformer block (+ 最终 norm), 以极小学习率微调,
+#                            提升域适配能力, 弥补"全冻结欠拟合/各类 IoU 普遍偏低"。
+#
+# 关键改动 (相对 _optim.py):
+#   ① optimizer 增加 paramwise_cfg: backbone ViT blocks 用 1/10 lr, 避免解冻后
+#     大学习率破坏预训练表征;
+#   ② param_scheduler 改为两阶段 (阶段2 重新 warmup, 适配新解冻参数);
+#   ③ custom_hooks 新增两个 FreezeScheduleHook (分别作用于 backbone_opt /
+#      backbone_sar), 在 iter=40000 同步解冻最后 2 层;
+#   ④ 不开启 use_checkpoint (保持 _optim 的高速), 显存上升靠降 bs/native 兜底。
+#
+# 注意: 解冻后显存显著上升 (尤其 SAR native 384 + ViT-L/12 反向)。
+#       OOM 应对 (按需): bs 8->4~6, 或 native_size 384->320, 或减少解冻层数。
 # ============================================================================
 
 _base_ = ['../_base_/default_runtime.py']
@@ -54,7 +63,7 @@ model = dict(
         extract_ids=[5, 11, 17, 23],
         dino_weight=Dino_weights_path,
         weights_type=Dino_weights_type,
-        freeze_mode='frozen',          # 冻结 DINOv3 ViT
+        freeze_mode='frozen',          # 阶段1 全冻结; 阶段2 由 Hook 切到 unfreeze_last_n
     ),
     backbone_sar = dict(
         type='OlmoEarthSAREncoder',
@@ -64,11 +73,11 @@ model = dict(
         model_variant='base',
         in_channels=3,
         out_channels=128,
-        freeze_backbone=True,           # 冻结 SAR backbone
+        freeze_backbone=True,           # 阶段1 全冻结; 阶段2 由 Hook 切到 unfreeze_last_n
         adaptive_pool=False,
         native_inference=True,
-        native_size=384,                # 提高到 384, 让 SAR ViT 真正处理更细分辨率
-        use_checkpoint=True,            # 梯度检查点, 降低 native↑ 带来的显存峰值
+        native_size=384,                # 保留 384, 让 SAR ViT 真正处理更细分辨率
+        use_checkpoint=False,           # ★ 关闭梯度检查点 (提速), 显存上升
         modality='sentinel1',
         input_res=10,
         default_month=0,
@@ -129,7 +138,7 @@ test_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=12,                      # native 384 显存增大
+    batch_size=8,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
@@ -171,21 +180,46 @@ val_evaluator = dict(type='mmseg.IoUMetric', iou_metrics=['mFscore', 'mIoU'])
 test_evaluator = dict(type='mmseg.IoUMetric', iou_metrics=['mFscore', 'mIoU'])
 
 # ---------------------------------------------------------------------------
-# 优化器与训练策略 (双 backbone 全冻结, 无 paramwise 分组)
+# 优化器: decoder/adapter 用基准 lr; backbone ViT blocks 用 1/10 lr
+# (paramwise_cfg 在 optimizer 构建时按参数名分组, 冻结参数 grad=None 会被
+#  optimizer 跳过, 解冻后自动以该组 lr 更新)
 # ---------------------------------------------------------------------------
 optimizer = dict(
     type='AdamW', lr=0.0005, betas=(0.9, 0.999), weight_decay=0.0005)
-optim_wrapper = dict(type='OptimWrapper', optimizer=optimizer)
+optim_wrapper = dict(
+    type='OptimWrapper',
+    optimizer=optimizer,
+    # paramwise_cfg 属于 OptimWrapperConstructor: 按参数名分组分配 lr_mult。
+    # 冻结参数 grad=None 会被 optimizer 跳过, 解冻后自动以该组 lr 更新。
+    paramwise_cfg=dict(
+        custom_keys={
+            # 光学 DINOv3 ViT blocks (ViT-L 共 24 层, 阶段2 仅最后 2 层解冻)
+            'backbone.adapter.backbone.blocks': dict(lr_mult=0.1),
+            # SAR OlmoEarth ViT blocks (base 共 12 层, 阶段2 仅最后 2 层解冻)
+            'backbone_sar.blocks': dict(lr_mult=0.1),
+        }))
 
 train_cfg = dict(type='IterBasedTrainLoop', max_iters=80000, val_interval=8000)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
-# ④ 80k 余弦调度: 5k warmup -> cosine 到 1e-6
+# ---------------------------------------------------------------------------
+# 两阶段学习率调度 (配合 FreezeScheduleHook, iter=40000 解冻):
+#   阶段1 (0 ~ 5k):     线性预热
+#   阶段1 (5k ~ 40k):   余弦退火到 5e-5 (阶段1 末, 为阶段2 低 lr 衔接)
+#   阶段2 (40k ~ 43k):  重新预热 (新解冻的 ViT 后 2 层需小学习率起步)
+#   阶段2 (43k ~ 80k):  余弦退火到 1e-6
+# ---------------------------------------------------------------------------
 param_scheduler = [
+    # 阶段1: 预热 + 余弦退火
     dict(type='LinearLR', start_factor=1e-5, by_epoch=False, begin=0, end=5000),
-    dict(type='CosineAnnealingLR', T_max=75000, eta_min=1e-6,
-         by_epoch=False, begin=5000, end=80000),
+    dict(type='CosineAnnealingLR', T_max=35000, eta_min=5e-5,
+         by_epoch=False, begin=5000, end=40000),
+    # 阶段2: 重新预热 (start_factor 相对当前 lr 再降到 1/10) + 余弦退火
+    dict(type='LinearLR', start_factor=0.1, end_factor=1.0,
+         by_epoch=False, begin=40000, end=43000),
+    dict(type='CosineAnnealingLR', T_max=37000, eta_min=1e-6,
+         by_epoch=False, begin=43000, end=80000),
 ]
 
 default_hooks = dict(
@@ -198,7 +232,34 @@ default_hooks = dict(
     visualization=dict(type='CDVisualizationHook', interval=1,
                        img_shape=(512, 512, 3)))
 
-# ① EMA: 权重平滑, val/test 自动换入 EMA 权重评估
+# ---------------------------------------------------------------------------
+# ① EMA 权重平滑 (val/test 自动换入 EMA 权重评估)
+# ② 两个 FreezeScheduleHook: 分别对 backbone_opt (属性名 'backbone') 与
+#    backbone_sar (属性名 'backbone_sar') 在 iter=40000 同步解冻最后 2 层。
+#    两个 backbone 的 set_freeze_mode 接口签名一致, 均支持 unfreeze_last_n。
+# ---------------------------------------------------------------------------
 custom_hooks = [
     dict(type='EMAHook', momentum=2e-4, update_buffers=True, priority='LOWEST'),
+    # 光学 DINOv3 分支: 模型属性为 self.backbone
+    dict(
+        type='FreezeScheduleHook',
+        backbone_attr='backbone',
+        schedule=[
+            dict(iter=0, freeze_mode='frozen'),
+            dict(iter=40000, freeze_mode='unfreeze_last_n',
+                 unfreeze_last_n=2),
+        ],
+        verbose=True,
+    ),
+    # SAR OlmoEarth 分支: 模型属性为 self.backbone_sar
+    dict(
+        type='FreezeScheduleHook',
+        backbone_attr='backbone_sar',
+        schedule=[
+            dict(iter=0, freeze_mode='frozen'),
+            dict(iter=40000, freeze_mode='unfreeze_last_n',
+                 unfreeze_last_n=2),
+        ],
+        verbose=True,
+    ),
 ]

@@ -389,6 +389,70 @@ class OlmoEarthSAREncoder(nn.Module):
                 p.requires_grad = False
         print("✓ OlmoEarth backbone frozen (feature_extractor & input_adapter trainable).")
 
+    def set_freeze_mode(self, mode='frozen', unfreeze_last_n=0):
+        """动态切换 SAR 主干的冻结模式 (兼容 FreezeScheduleHook)。
+
+        与 DINOv3AdapterBackbone.set_freeze_mode 行为对齐, 支持:
+            - 'frozen':           完全冻结 backbone (保留 feature_extractor/
+                                  input_adapter 可训练)
+            - 'full_finetune':    全量解冻 backbone
+            - 'unfreeze_last_n':  仅解冻最后 N 个 transformer block + 最终 norm,
+                                  其余 backbone 参数保持冻结
+
+        切换后无需修改 optimizer: 参数在初始化时已加入, 冻结时 grad=None
+        被自动跳过, 解冻后梯度正常计算更新。
+
+        Args:
+            mode (str): 'frozen' / 'full_finetune' / 'unfreeze_last_n'
+            unfreeze_last_n (int): mode='unfreeze_last_n' 时解冻的 block 数
+        """
+        if mode == 'frozen':
+            self._freeze_backbone()
+        elif mode == 'full_finetune':
+            for p in self.patch_embeddings.parameters():
+                p.requires_grad = True
+            for p in self.composite_encodings.parameters():
+                p.requires_grad = True
+            for p in self.blocks.parameters():
+                p.requires_grad = True
+            for p in self.norm.parameters():
+                p.requires_grad = True
+            if self.project_and_aggregate is not None:
+                for p in self.project_and_aggregate.parameters():
+                    p.requires_grad = True
+        elif mode == 'unfreeze_last_n':
+            # 先全量冻结 backbone
+            for p in self.patch_embeddings.parameters():
+                p.requires_grad = False
+            for p in self.composite_encodings.parameters():
+                p.requires_grad = False
+            for p in self.blocks.parameters():
+                p.requires_grad = False
+            for p in self.norm.parameters():
+                p.requires_grad = False
+            if self.project_and_aggregate is not None:
+                for p in self.project_and_aggregate.parameters():
+                    p.requires_grad = False
+            # 仅解冻最后 N 个 transformer block
+            n_blocks = len(self.blocks)
+            start = max(0, n_blocks - unfreeze_last_n)
+            for i in range(start, n_blocks):
+                for p in self.blocks[i].parameters():
+                    p.requires_grad = True
+            # 解冻最终 norm 层
+            if hasattr(self, 'norm') and self.norm is not None:
+                for p in self.norm.parameters():
+                    p.requires_grad = True
+        else:
+            raise ValueError(
+                f"Unknown freeze_mode: '{mode}', expected one of "
+                f"['frozen', 'full_finetune', 'unfreeze_last_n']")
+
+        self.freeze_backbone = (mode == 'frozen')
+        print(f"✓ OlmoEarth SAR backbone freeze_mode='{mode}'"
+              + (f", unfreeze_last_n={unfreeze_last_n}"
+                 if mode == 'unfreeze_last_n' else ''))
+
     # ------------------------------------------------------------------
     def _apply_composite_encodings(self, tokens, Hp, Wp):
         """与官方 CompositeEncodings._apply_encodings_per_modality 一致的加法编码。
